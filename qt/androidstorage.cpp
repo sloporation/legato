@@ -87,7 +87,7 @@ bool AndroidStorage::open(const QString &where)
         m_serial = where;
 
     if (LIBMTP_Get_Storage(m_device, LIBMTP_STORAGE_SORTBY_NOTSORTED) != 0 || !m_device->storage)
-        return fail(QObject::tr("The phone isn't sharing its files. Unlock it and choose “File transfer” for its USB connection."));
+        return fail(QObject::tr("The phone isn't sharing its files"));
     m_storage = m_device->storage->id;     // the first is the phone's own
 
     // Music, then Legato in it

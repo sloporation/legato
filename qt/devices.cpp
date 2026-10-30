@@ -9,6 +9,7 @@
 
 #include <QFileInfo>
 #include <QHostInfo>
+#include <QRegularExpression>
 #include <QQmlEngine>
 #include <QSet>
 #include <QTimer>
@@ -76,14 +77,24 @@ void DeviceWorker::poll()
         const auto it = m_known.constFind(id);
         if (it != m_known.cend() && it->value("status") == "ready")
             continue;
-        if (it != m_known.cend() && id.startsWith("android:") && it->value("tries").toInt() >= 3)
-            continue;     // (opening an MTP device takes a while: don't keep at it)
-        QVariantMap d = look(id);
-        d["tries"] = it == m_known.cend() ? 1 : it->value("tries").toInt() + 1;
-        if (it == m_known.cend() || *it != d) {
-            m_known.insert(id, d);
-            emit seen(d);
+        // (opening an MTP device takes a while, and holds it while it does: after the first few tries, only every fourth poll)
+        const int tries = it == m_known.cend() ? 0 : it->value("tries").toInt();
+        if (id.startsWith("android:") && tries >= 3 && tries % 4 != 0) {
+            m_known[id]["tries"] = tries + 1;
+            continue;
         }
+        QVariantMap d = look(id);
+        d["tries"] = tries + 1;
+        QVariantMap before = it == m_known.cend() ? QVariantMap() : *it;
+        before.remove("tries");
+        m_known.insert(id, d);
+        d.remove("tries");
+        if (before != d)
+            emit seen(d);
+    }
+    if (!m_phoneId.isEmpty() && !now.contains(m_phoneId)) {     // (unplugged with a sync's hold on it)
+        m_phone.reset();
+        m_phoneId.clear();
     }
     for (const QString &id : m_known.keys()) {
         if (!now.contains(id)) {
@@ -93,33 +104,43 @@ void DeviceWorker::poll()
     }
 }
 
-void DeviceWorker::collect(const QString &id)
+DeviceStorage *DeviceWorker::reach(const QString &id, QString *error)
 {
-    QVariantList changes;
-    QString error;
-    auto take = [&](DeviceStorage &phone) {
-        if (!collectChanges(phone, &changes))
-            error = tr("Couldn't read the playlist changes on the phone: %1").arg(phone.error());
-    };
+    if (m_phone && m_phoneId == id)
+        return m_phone.get();
+    m_phone.reset();
 #ifdef LEGATO_IPHONE
     if (id.startsWith("iphone:")) {
-        IPhoneStorage phone;
-        if (phone.open(id.mid(7)) != IPhoneStorage::Ready)
-            error = phone.error();
+        auto phone = std::make_unique<IPhoneStorage>();
+        if (phone->open(id.mid(7)) == IPhoneStorage::Ready)
+            m_phone = std::move(phone);
         else
-            take(phone);
+            *error = phone->error();
     }
 #endif
 #ifdef LEGATO_ANDROID
     if (id.startsWith("android:")) {
-        AndroidStorage phone;
-        if (!phone.open(id.mid(8)))
-            error = phone.error();
+        auto phone = std::make_unique<AndroidStorage>();
+        if (phone->open(id.mid(8)))
+            m_phone = std::move(phone);
         else
-            take(phone);
+            *error = phone->error();
     }
 #endif
-    Q_UNUSED(take);
+    m_phoneId = m_phone ? id : QString();
+    return m_phone.get();
+}
+
+void DeviceWorker::collect(const QString &id)
+{
+    QVariantList changes;
+    QString error;
+    if (DeviceStorage *phone = reach(id, &error)) {
+        if (!collectChanges(*phone, &changes)) {
+            error = tr("Couldn't read the playlist changes on the phone: %1").arg(phone->error());
+            m_phone.reset();
+        }
+    }
     emit collected(id, changes, error);
 }
 
@@ -127,34 +148,19 @@ void DeviceWorker::sync(const QString &id, const SyncJob &job)
 {
     stop = false;
     QVariantMap result;
-    auto progress = [&](qint64 done, qint64 total, const QString &what) {
-        emit this->progress(id, done, total, what);
-        return !stop.load();
-    };
-    auto report = [&](DeviceStorage &phone, const SyncResult &r) {
+    QString error;
+    if (DeviceStorage *phone = reach(id, &error)) {
+        const SyncResult r = runSync(*phone, job, [&](qint64 done, qint64 total, const QString &what) {
+            emit progress(id, done, total, what);
+            return !stop.load();
+        });
         result = { { "ok", r.ok }, { "message", r.message }, { "copied", r.copied }, { "removed", r.removed },
-                   { "converted", r.converted }, { "unplayable", r.unplayable }, { "free", phone.freeSpace() } };
-    };
-#ifdef LEGATO_IPHONE
-    if (id.startsWith("iphone:")) {
-        IPhoneStorage phone;
-        if (phone.open(id.mid(7)) != IPhoneStorage::Ready)
-            result = { { "ok", false }, { "message", phone.error() } };
-        else
-            report(phone, runSync(phone, job, progress));
+                   { "converted", r.converted }, { "unplayable", r.unplayable }, { "free", phone->freeSpace() } };
+    } else {
+        result = { { "ok", false }, { "message", error } };
     }
-#endif
-#ifdef LEGATO_ANDROID
-    if (id.startsWith("android:")) {
-        AndroidStorage phone;
-        if (!phone.open(id.mid(8)))
-            result = { { "ok", false }, { "message", phone.error() } };
-        else
-            report(phone, runSync(phone, job, progress));
-    }
-#endif
-    Q_UNUSED(report);
-    Q_UNUSED(progress);
+    m_phone.reset();     // (let go of it: other apps, and the next look, can have it)
+    m_phoneId.clear();
     emit synced(id, result);
 }
 
@@ -295,7 +301,7 @@ SyncJob Devices::job(const QString &kind, const QVariantMap &chosen) const
 {
     SyncJob job;
     job.chosen = chosen;
-    job.source = tr("Legato on %1").arg(QHostInfo::localHostName());
+    job.source = tr("Legato on %1").arg(QHostInfo::localHostName().remove(QRegularExpression("\\.local$")));
     job.playable = kind == "iphone" ? iphonePlays : androidPlays;
     job.convertible = anyAudio;
     static const QString ffmpeg = findFfmpeg();

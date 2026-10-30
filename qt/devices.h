@@ -6,7 +6,9 @@
 #include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 #include <atomic>
+#include <memory>
 
+#include "devicestorage.h"
 #include "sync.h"
 
 class Library;
@@ -33,7 +35,12 @@ signals:
 
 private:
     QVariantMap look(const QString &id);     // open the phone: its name, whether it can be synced, what was chosen for it
+    // the phone, opened (or the one a sync has open already: it stays open from taking the changes to the end of the sync, as an
+    // Android phone may not answer when opened again so soon); null, with why, if it can't be
+    DeviceStorage *reach(const QString &id, QString *error);
     QHash<QString, QVariantMap> m_known;
+    std::unique_ptr<DeviceStorage> m_phone;
+    QString m_phoneId;
 };
 Q_DECLARE_METATYPE(SyncJob)
 
