@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Legato
+Comment=A not-so-simple music player
+Exec=legato
+Icon=legato
+Categories=AudioVideo;Audio;Player;
+Terminal=false

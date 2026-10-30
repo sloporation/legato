@@ -1,6 +1,8 @@
 #include "library.h"
 #include "settings.h"
 
+#include <climits>
+
 #include <QCollator>
 #include <QDesktopServices>
 #include <QProcess>

@@ -14,4 +14,6 @@ which renders it (with Qt's SVG renderer, in `tools/`) into:
 | `ios/Legato/Assets.xcassets/AppIcon.appiconset/icon-1024.png` | Legato for iPhone (opaque, full bleed: iOS rounds the corners) |
 | `ios/LegatoWatch/Assets.xcassets/AppIcon.appiconset/icon-1024.png` | Legato for Apple Watch (watchOS crops it to a circle) |
 | `qt/icons/legato.png` | Legato Desktop's window and Dock icon (the macOS shape: a rounded square with a margin) |
+| `qt/icons/legato.icns` | Legato.app's icon in Finder (made on macOS only, with iconutil) |
+| `qt/icons/legato-512.png` | the Linux AppImage's icon |
 | `icon-preview.png` | a preview, rounded as on the iPhone |

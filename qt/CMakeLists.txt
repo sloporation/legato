@@ -1,13 +1,15 @@
 cmake_minimum_required(VERSION 3.16)
-project(legato LANGUAGES C CXX)
+# The release workflow sets the version from the tag (v1.2.3 → 1.2.3).
+set(LEGATO_VERSION "0.1.0" CACHE STRING "Legato's version, shown in the app's Info.plist")
+project(legato VERSION ${LEGATO_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Multimedia)
-# TagLib reads (and will write) the tags in the music files: macOS `brew install taglib`, Debian/Ubuntu `libtag1-dev` (2.x),
-# Windows `vcpkg install taglib`.
+# TagLib 2 reads and writes the tags in the music files: macOS `brew install taglib`, Windows `vcpkg install taglib`; on Linux,
+# distributions that still ship 1.x (Ubuntu 24.04) need it built from source (see .github/workflows/build.yml).
 find_package(TagLib 2.0 REQUIRED)
 qt_standard_project_setup(REQUIRES 6.5)
 qt_policy(SET QTP0004 NEW)
@@ -62,4 +64,20 @@ target_link_libraries(legato PRIVATE legato_core Qt6::Quick Qt6::QuickControls2 
 if(APPLE)
     # FSEvents, for noticing changes in the music folders
     target_link_libraries(legato PRIVATE "-framework CoreServices")
+
+    # a proper app: Legato.app, with its icon in Finder and the Dock
+    set(LEGATO_ICNS ${CMAKE_CURRENT_SOURCE_DIR}/icons/legato.icns)
+    set_source_files_properties(${LEGATO_ICNS} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(legato PRIVATE ${LEGATO_ICNS})
+    set_target_properties(legato PROPERTIES
+        MACOSX_BUNDLE TRUE
+        OUTPUT_NAME Legato
+        MACOSX_BUNDLE_BUNDLE_NAME Legato
+        MACOSX_BUNDLE_GUI_IDENTIFIER com.sloporation.legato.desktop
+        MACOSX_BUNDLE_ICON_FILE legato.icns
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+elseif(WIN32)
+    # a window, not a console
+    set_target_properties(legato PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
