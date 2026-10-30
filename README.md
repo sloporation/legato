@@ -16,15 +16,58 @@
 
 ---
 
-Legato looks after the music in folders you choose. The tags in the files say what each song is, and playlists are the `.m3u` and
-`.m3u8` files beside them, so Legato keeps no database of its own and your library stays readable by any other player. Plug a
-phone in and Legato puts your choice of music on it over USB, with nothing in between: no server, no network, no cloud.
+Legato Desktop is a music player for the music files on your computer.
 
-| | |
-|---|---|
-| **Legato Desktop** | macOS, Linux and Windows (Qt 6, QML) |
-| **Legato for iPhone** | iOS 17 and later (SwiftUI), with **Legato for Apple Watch** (watchOS 10) |
-| **Legato for Android** | Android 8.0 and later (Jetpack Compose, Media3) |
+You can simply point it at the music folder on your computer and it will scan in 
+all of the music files and read their metadata.
+
+Change track information and Legato updates the metadata on your file.
+
+You can sync your music from Legato Desktop to your Legato Phone app. Your 
+Legato Phone app will ship to your Legato Watch app.
+
+This is very similar to how the old iTunes used to work, however unlike Apple
+Music, Legato actually works with the metadata on your files instead of building
+its own database.
+
+You can use tools like Picard to keep your metadata updated.
+
+Legato doesn't enforce a directory structure either. It *only* works on metadata
+so it doesn't matter what you do to the directories underneath.
+
+---
+
+## Usability Notes
+
+I ended up building Legato more for my own uses instead of building something 
+'designed for other people', so there's a neat quirk you might like.
+
+I primarily work from the 'tracks' view in all of my other music apps. I have 
+found that 'albums' and 'artists' views have always caused more problems than 
+it's worth.
+
+So keep in mind that the primary way of using Legato is to search for what you 
+want to play, then just play it.
+
+On Legato Desktop:
+
+- Search `artist:` or `album:` to filter only on those fields
+- Right click -> go to album
+- Playlists, dur
+
+On Legato Phone:
+
+- Search for your album or artist then long-press -> Go to Album
+- If you search for an album and press the 'play' at the top, it only plays that album
+- If you search for an album and press on a track, it will queue all tracks from your library
+
+Legato also doesn't manage your actual files, only their metadata. The only way 
+to 'exclude' tracks from Legato is to delete it from disk or move it away from 
+the monitored directory.
+
+Again, this worked best for me. I hate 'live' inclusions in albums, so I just 
+right click those, find in Finder and delete them from disk. My music library is 
+the files; I don't hoard stuff I don't listen to.
 
 ## Features
 
