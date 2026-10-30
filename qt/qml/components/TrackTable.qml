@@ -296,27 +296,30 @@ FocusScope {
             }
         }
 
+        // the system's own context menu (macOS, Windows; Qt draws one where the platform has none)
         Menu {
             id: rowMenu
+            objectName: "rowMenu"
+            popupType: Popup.Native
             readonly property var track: table.rows[list.currentIndex]
-            MenuItem {
+            Action {
                 text: rowMenu.track && Player.current.path === rowMenu.track.path && Player.playing ? qsTr("Pause") : qsTr("Play")
                 onTriggered: table.playOrPause(list.currentIndex)
             }
             MenuSeparator {}
-            MenuItem { text: qsTr("Edit Info…"); onTriggered: info.edit(rowMenu.track.path) }
-            MenuItem {
+            // Cmd+I (Ctrl+I elsewhere), as Get Info in Apple Music and Finder: the menu shows it beside the item
+            Action {
+                text: qsTr("Edit Info…")
+                shortcut: "Ctrl+I"
+                enabled: list.currentIndex >= 0 && !info.visible
+                onTriggered: info.edit(table.rows[list.currentIndex].path)
+            }
+            Action {
                 text: Qt.platform.os === "osx" ? qsTr("Show in Finder") : qsTr("Show in Folder")
                 onTriggered: Library.reveal(rowMenu.track.path)
             }
         }
         TrackInfoDialog { id: info; objectName: "trackInfo" }
-        // Cmd+I (Ctrl+I elsewhere), as Get Info in Apple Music and Finder
-        Shortcut {
-            sequences: ["Ctrl+I"]
-            enabled: list.currentIndex >= 0 && !info.visible
-            onActivated: info.edit(table.rows[list.currentIndex].path)
-        }
 
         Label {
             anchors.centerIn: parent
