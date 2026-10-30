@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -98,7 +99,7 @@ fun Cover(library: LibraryStore, path: String?, size: Dp, modifier: Modifier = M
         modifier.size(size).clip(RoundedCornerShape(size * 0.08f)).background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {
-        image?.let { Image(it, null, Modifier.size(size), contentScale = ContentScale.Crop) }
+        image?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
             ?: Icon(Glyph.music, size = size * 0.4f, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
