@@ -26,35 +26,40 @@ struct RootView: View {
     var body: some View {
         TabView {
             Stack { HomeView() }
-                .withMiniPlayer()
                 .tabItem { Label("Music", systemImage: "music.note") }
             Stack { PlaylistsView() }
-                .withMiniPlayer()
                 .tabItem { Label("Playlists", systemImage: "music.note.list") }
         }
     }
 }
 
-/// A tab's stack: its own path (so each tab keeps its place), and everywhere a long-press or the cog menu can lead.
+/// A tab's stack: its own path (so each tab keeps its place), and everywhere a long-press or the cog menu can lead. Each page in it
+/// makes room for the mini player itself: a list only keeps its last rows clear of an inset that is on the page, not on the stack.
 private struct Stack<Root: View>: View {
     @ViewBuilder var root: Root
     @State private var navigator = Navigator()
+    @State private var showingNowPlaying = false
 
     var body: some View {
         NavigationStack(path: $navigator.path) {
             root
+                .withMiniPlayer { showingNowPlaying = true }
                 .navigationDestination(for: Route.self) { route in
-                    switch route {
-                    case .album(let key): AlbumView(key: key)
-                    case .artist(let name): ArtistView(name: name)
-                    case .playlist(let name): PlaylistView(name: name)
-                    case .settings: SettingsView()
-                    case .equaliser: EqualiserView()
-                    case .watchSync: WatchView()
+                    Group {
+                        switch route {
+                        case .album(let key): AlbumView(key: key)
+                        case .artist(let name): ArtistView(name: name)
+                        case .playlist(let name): PlaylistView(name: name)
+                        case .settings: SettingsView()
+                        case .equaliser: EqualiserView()
+                        case .watchSync: WatchView()
+                        }
                     }
+                    .withMiniPlayer { showingNowPlaying = true }
                 }
         }
         .environment(navigator)
+        .sheet(isPresented: $showingNowPlaying) { NowPlayingView() }
     }
 }
 
@@ -78,24 +83,24 @@ private struct AppMenu: ViewModifier {
     }
 }
 
+/// The mini player at the foot of a page, above the tab bar, whenever something is loaded; the page's lists end above it.
 private struct MiniPlayerInset: ViewModifier {
+    var open: () -> Void
     @Environment(Player.self) private var player
-    @State private var showingNowPlaying = false
 
     func body(content: Content) -> some View {
         content
-            .safeAreaInset(edge: .bottom) {
+            .safeAreaInset(edge: .bottom, spacing: 10) {     // (and a little room between the last row and it)
                 if player.current != nil {
-                    MiniPlayer { showingNowPlaying = true }
+                    MiniPlayer(open: open)
                         .padding(.horizontal, 8)
                         .padding(.bottom, 4)
                 }
             }
-            .sheet(isPresented: $showingNowPlaying) { NowPlayingView() }
     }
 }
 
 extension View {
-    func withMiniPlayer() -> some View { modifier(MiniPlayerInset()) }
+    func withMiniPlayer(open: @escaping () -> Void) -> some View { modifier(MiniPlayerInset(open: open)) }
     func withAppMenu() -> some View { modifier(AppMenu()) }
 }
