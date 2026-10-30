@@ -52,7 +52,7 @@ public:
 
     // what the phone is to have; kept until it's synced (and then on the phone)
     Q_INVOKABLE void choose(const QString &id, const QVariantMap &chosen);
-    // what a choice comes to on that kind of phone: { songs, bytes, unplayable }
+    // what a choice comes to on that kind of phone: { songs, bytes, converted (of the songs, how many get converted), unplayable }
     Q_INVOKABLE QVariantMap measure(const QString &kind, const QVariantMap &chosen) const;
     Q_INVOKABLE void sync(const QString &id);
     Q_INVOKABLE void stopSync();

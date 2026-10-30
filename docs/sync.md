@@ -15,7 +15,7 @@ Everything Legato writes lives in one folder, `Documents/Legato/`:
 ```
 Legato/
   manifest.json          what is synced: the tracks (with their tags) and the playlists
-  Music/<id>.<ext>       one file per track, as it is on the desktop (or converted, if the phone can't play the original)
+  Music/<id>.<ext>       one file per track, as it is on the desktop (or converted to .m4a, if the phone can't play the original)
   Covers/<hash>.jpg      album covers, extracted by the desktop (600 px)
 ```
 
@@ -29,8 +29,10 @@ A sync:
 The phone reads the manifest when it comes to the foreground, and when it changes while the app is open.
 
 Legato Desktop shows a phone in its sidebar under Devices while it is plugged in. Its page chooses what goes on it: everything, or some
-playlists, artists and albums; Sync does the rest. Files the phone can't play are left off (the iPhone takes MP3, AAC/ALAC, WAV, AIFF and
-FLAC; Android also Ogg Vorbis, Opus and Matroska audio). Covers are named after a hash of the JPEG, so a changed cover arrives as a new
+playlists, artists and albums; Sync does the rest. Files the phone can't play are converted to AAC (256 kbps `.m4a`) with ffmpeg on the way: on
+the iPhone, anything but MP3, AAC/ALAC, WAV, AIFF and FLAC (so Opus, Ogg Vorbis and WebM/Matroska audio); on Android, the few formats
+ExoPlayer doesn't take (WMA, APE, WavPack and the like). The converted file keeps the original's `id`, `size` and `modified` in the
+manifest, so it is only converted again when the original changes. Without ffmpeg, those files are left off. Covers are named after a hash of the JPEG, so a changed cover arrives as a new
 file. On Linux, iPhones need the `usbmuxd` service running. Windows can't sync yet.
 
 ## Desktop → Android (USB)

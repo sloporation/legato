@@ -15,9 +15,11 @@
 
 namespace {
 
-// what each phone's player can play (AVPlayer; Media3 ExoPlayer)
+// what each phone's player can play (AVPlayer; Media3 ExoPlayer); the rest of what the library holds is converted to AAC on the way
 const QStringList iphonePlays = { "mp3", "m4a", "mp4", "aac", "alac", "wav", "aif", "aiff", "flac" };
 const QStringList androidPlays = { "mp3", "m4a", "mp4", "aac", "flac", "wav", "ogg", "oga", "opus", "mka", "webm" };
+const QStringList anyAudio = { "mp3", "flac", "wav", "m4a", "mp4", "aac", "alac", "ogg", "oga", "opus", "spx", "aif", "aiff", "wma", "ape",
+                               "wv", "mpc", "dsf", "dff", "mka", "webm" };
 
 } // namespace
 
@@ -101,7 +103,7 @@ void DeviceWorker::sync(const QString &id, const SyncJob &job)
     };
     auto report = [&](DeviceStorage &phone, const SyncResult &r) {
         result = { { "ok", r.ok }, { "message", r.message }, { "copied", r.copied }, { "removed", r.removed },
-                   { "unplayable", r.unplayable }, { "free", phone.freeSpace() } };
+                   { "converted", r.converted }, { "unplayable", r.unplayable }, { "free", phone.freeSpace() } };
     };
 #ifdef LEGATO_IPHONE
     if (id.startsWith("iphone:")) {
@@ -174,11 +176,16 @@ Devices::Devices(Library *library, QObject *parent)
         const QString name = i >= 0 ? m_devices[i].toMap()["name"].toString() : QString();
         QString message = r["message"].toString();
         if (r["ok"].toBool()) {
-            message = tr("Synced: %n song(s) copied", nullptr, r["copied"].toInt());
-            if (r["removed"].toInt() > 0)
-                message += tr(", %n removed", nullptr, r["removed"].toInt());
-            if (r["unplayable"].toInt() > 0)
-                message += tr(". %n left off, as the phone can't play them", nullptr, r["unplayable"].toInt());
+            const int copied = r["copied"].toInt(), converted = r["converted"].toInt(), removed = r["removed"].toInt(),
+                      unplayable = r["unplayable"].toInt();
+            message = copied == 0 && removed == 0 ? tr("Up to date")
+                    : copied == 1 ? tr("Synced: 1 song copied") : tr("Synced: %1 songs copied").arg(copied);
+            if (converted > 0)
+                message += tr(" (%1 converted to AAC)").arg(converted);
+            if (removed > 0)
+                message += tr(", %1 removed").arg(removed);
+            if (unplayable > 0)
+                message += tr(". %1 left off: the phone can't play them, and there's no ffmpeg to convert them").arg(unplayable);
         }
         emit synced(name, message);
     });
@@ -236,6 +243,9 @@ SyncJob Devices::job(const QString &kind, const QVariantMap &chosen) const
     job.chosen = chosen;
     job.source = tr("Legato on %1").arg(QHostInfo::localHostName());
     job.playable = kind == "iphone" ? iphonePlays : androidPlays;
+    job.convertible = anyAudio;
+    static const QString ffmpeg = findFfmpeg();
+    job.ffmpeg = ffmpeg;
 
     const QVariantList all = m_library->tracks();
     const bool everything = chosen["everything"].toBool();
@@ -285,18 +295,24 @@ SyncJob Devices::job(const QString &kind, const QVariantMap &chosen) const
 QVariantMap Devices::measure(const QString &kind, const QVariantMap &chosen) const
 {
     const SyncJob j = job(kind, chosen);
-    int songs = 0, unplayable = 0;
+    int songs = 0, converted = 0, unplayable = 0;
     qint64 bytes = 0;
     for (const QVariant &v : j.tracks) {
         const QFileInfo info(v.toMap()["path"].toString());
-        if (j.playable.contains(info.suffix().toLower())) {
+        const QString suffix = info.suffix().toLower();
+        if (j.playable.contains(suffix)) {
             songs++;
             bytes += info.size();
+        } else if (!j.ffmpeg.isEmpty() && j.convertible.contains(suffix)) {
+            songs++;
+            converted++;
+            bytes += info.size();     // (about what the AAC comes to: Opus and AAC at these rates are much of a size)
         } else {
             unplayable++;
         }
     }
-    return { { "songs", songs }, { "bytes", bytes }, { "unplayable", unplayable } };
+    return { { "songs", songs }, { "bytes", bytes }, { "converted", converted }, { "unplayable", unplayable },
+             { "ffmpeg", !j.ffmpeg.isEmpty() } };
 }
 
 void Devices::sync(const QString &id)

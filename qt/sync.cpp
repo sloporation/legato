@@ -6,13 +6,17 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QHash>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QSet>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 
 namespace {
 
@@ -69,7 +73,37 @@ QByteArray manifestJson(const QString &source, const QJsonArray &tracks, const Q
     return QJsonDocument(manifest).toJson(QJsonDocument::Indented);
 }
 
+// what the phone can't play, as AAC: 256 kbps, the audio only (the cover goes separately), with Apple's encoder where there is one
+bool convert(const QString &ffmpeg, const QString &from, const QString &to, QString *why)
+{
+    static const bool appleAac = [&] {
+        QProcess p;
+        p.start(ffmpeg, { "-hide_banner", "-encoders" });
+        p.waitForFinished(10000);
+        return p.readAllStandardOutput().contains("aac_at");
+    }();
+    QProcess p;
+    p.setProcessChannelMode(QProcess::MergedChannels);
+    p.start(ffmpeg, { "-hide_banner", "-loglevel", "error", "-y", "-i", from, "-map", "0:a:0", "-vn",
+                      "-c:a", appleAac ? "aac_at" : "aac", "-b:a", "256k", "-movflags", "+faststart", to });
+    if (!p.waitForFinished(10 * 60 * 1000) || p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) {
+        *why = QString::fromUtf8(p.readAll()).trimmed().section('\n', -1);
+        if (why->isEmpty())
+            *why = QObject::tr("ffmpeg couldn't convert it");
+        return false;
+    }
+    return true;
+}
+
 } // namespace
+
+QString findFfmpeg()
+{
+    const QString found = QStandardPaths::findExecutable("ffmpeg");
+    if (!found.isEmpty())
+        return found;
+    return QStandardPaths::findExecutable("ffmpeg", { "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin" });
+}
 
 QString syncId(const QString &path)
 {
@@ -104,7 +138,7 @@ SyncResult runSync(DeviceStorage &device, const SyncJob &job, const SyncProgress
             before.insert(v.toObject()["id"].toString(), v.toObject());
 
     // what it should have
-    struct Copy { QString id, local, file, title; qint64 size; };
+    struct Copy { QString id, local, file, title; qint64 size; bool convert; };
     QList<Copy> copies;
     QJsonArray tracks;
     QHash<QString, QString> idOfPath;
@@ -116,14 +150,16 @@ SyncResult runSync(DeviceStorage &device, const SyncJob &job, const SyncProgress
         const QVariantMap t = v.toMap();
         const QString path = t["path"].toString();
         const QFileInfo info(path);
-        if (!job.playable.contains(info.suffix().toLower())) {
+        const QString suffix = info.suffix().toLower();
+        const bool convert = !job.playable.contains(suffix);
+        if (convert && (job.ffmpeg.isEmpty() || !job.convertible.contains(suffix))) {
             result.unplayable++;
             continue;
         }
         const QString id = syncId(path);
         if (wanted.contains(id))
             continue;
-        const QString file = "Music/" + id + "." + info.suffix().toLower();
+        const QString file = "Music/" + id + "." + (convert ? QStringLiteral("m4a") : suffix);
         const QString modified = isoTime(info.lastModified());
         QJsonObject entry {
             { "id", id }, { "file", file },
@@ -137,7 +173,8 @@ SyncResult runSync(DeviceStorage &device, const SyncJob &job, const SyncProgress
             && old["modified"].toString() == modified) {
             keep.insert(id);
         } else {
-            copies.append({ id, path, file, t["title"].toString().isEmpty() ? info.completeBaseName() : t["title"].toString(), info.size() });
+            copies.append({ id, path, file, t["title"].toString().isEmpty() ? info.completeBaseName() : t["title"].toString(), info.size(),
+                            convert });
             total += info.size();
         }
         const QString album = albumKey(t);
@@ -187,18 +224,32 @@ SyncResult runSync(DeviceStorage &device, const SyncJob &job, const SyncProgress
         }
     }
 
-    // 3. the new and changed files, each as .part, renamed into place once it is all there
+    // 3. the new and changed files, each as .part, renamed into place once it is all there (converted first, if it has to be)
     qint64 done = 0;
     bool stopped = false;
+    QTemporaryDir scratch;
     for (const Copy &c : copies) {
         if (!progress(done, total, c.title)) {
             stopped = true;
             break;
         }
         const qint64 start = done;
-        const bool ok = device.upload(c.local, c.file + ".part", [&](qint64 sent) {
-            return progress(start + sent, total, c.title);
+        QString local = c.local, why;
+        if (c.convert) {
+            local = scratch.filePath(c.id + ".m4a");
+            if (!convert(job.ffmpeg, c.local, local, &why)) {
+                result.message = QObject::tr("Couldn't convert “%1”: %2").arg(c.title, why);
+                done = start + c.size;
+                continue;
+            }
+        }
+        // (a converted file is a different size: its progress is scaled to the original's)
+        const qint64 size = QFileInfo(local).size();
+        const bool ok = device.upload(local, c.file + ".part", [&](qint64 sent) {
+            return progress(start + (size > 0 ? sent * c.size / size : sent), total, c.title);
         });
+        if (c.convert)
+            QFile::remove(local);
         if (!ok || !device.rename(c.file + ".part", c.file)) {
             device.remove(c.file + ".part");
             if (!progress(start, total, c.title)) {
@@ -213,6 +264,7 @@ SyncResult runSync(DeviceStorage &device, const SyncJob &job, const SyncProgress
         done = start + c.size;
         present.insert(c.id);
         result.copied++;
+        result.converted += c.convert;
     }
 
     // 4. the covers, named after what is in them, so a changed cover is a new file

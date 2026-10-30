@@ -104,7 +104,9 @@ Item {
                     text: view.device?.syncing && view.device.total > 0
                           ? qsTr("%1 of %2").arg(view.size(view.device.done)).arg(view.size(view.device.total))
                           : [view.device?.free >= 0 ? qsTr("%1 free on the %2").arg(view.size(view.device.free)).arg(view.kindName) : "",
-                             view.measured.unplayable > 0 ? qsTr("%1 more the %2 can't play").arg(view.measured.unplayable).arg(view.kindName) : ""]
+                             view.measured.converted > 0 ? qsTr("%1 converted to AAC on the way").arg(view.measured.converted) : "",
+                             view.measured.unplayable > 0 ? qsTr("%1 more the %2 can't play (install ffmpeg to convert them)")
+                                                                .arg(view.measured.unplayable).arg(view.kindName) : ""]
                                 .filter(s => s !== "").join(" · ")
                 }
                 ProgressBar {

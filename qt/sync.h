@@ -14,7 +14,9 @@ struct SyncJob {
     QList<QPair<QString, QStringList>> playlists;     // name, and its tracks' paths in order
     QVariantMap chosen;       // the choice itself, kept in the manifest so the next sync (from any computer) starts from it
     QString source;           // "Legato on Jacob's MacBook"
-    QStringList playable;     // the file types the phone can play (suffixes); the others are left off
+    QStringList playable;     // the file types the phone can play (suffixes)
+    QStringList convertible;  // the ones it can't that are converted to AAC (.m4a) on the way, when there is an ffmpeg
+    QString ffmpeg;           // ffmpeg's path (findFfmpeg), or "" to leave those off too
 };
 
 struct SyncResult {
@@ -22,7 +24,8 @@ struct SyncResult {
     QString message;          // what happened, for the person
     int copied = 0;
     int removed = 0;
-    int unplayable = 0;       // tracks left off because the phone can't play them
+    int converted = 0;        // of the copied, how many were converted to AAC
+    int unplayable = 0;       // tracks left off because the phone can't play them and they couldn't be converted
 };
 
 // done and total in bytes; what: what it is doing now. Returning false stops the sync, leaving the phone with what got there.
@@ -38,3 +41,7 @@ QVariantMap readChosen(DeviceStorage &device);
 
 // a track's id on the phone: stable across syncs, from the path of its file here
 QString syncId(const QString &path);
+
+// ffmpeg, if it's installed: on the PATH, or where Homebrew and the Linux distributions put it (an app started from the Dock or Finder
+// doesn't get the shell's PATH); "" if not
+QString findFfmpeg();
