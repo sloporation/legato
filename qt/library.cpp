@@ -678,6 +678,11 @@ QVariantMap Library::tagsForEditing(const QString &path) const
     out["trackTotal"] = track.second;
     out["discNumber"] = disc.first;
     out["discTotal"] = disc.second;
+    // ("0/10": a total written for a track with no number)
+    if (track.first == "0")
+        out["trackNumber"] = QString();
+    if (disc.first == "0")
+        out["discNumber"] = QString();
     // also the totals some formats keep apart (Vorbis comments: TRACKTOTAL, DISCTOTAL)
     if (track.second.isEmpty())
         out["trackTotal"] = firstValue(props, "TRACKTOTAL");
@@ -741,10 +746,16 @@ QString Library::saveTags(const QString &path, const QVariantMap &tags)
     for (const auto &[name, key] : editableTags)
         if (tags.contains(name))
             put(key, tags[name].toString());
-    // numbers as "n/total", the form every format's readers understand; a separate total (Vorbis) goes, so it can't disagree
+    // numbers as "n/total", the form every format's readers understand; a separate total (Vorbis) goes, so it can't disagree. A total
+    // with no number (set on tracks that have none) is kept on its own instead, where the format has a tag for that (else as "0/total").
+    QList<QPair<const char *, QString>> loneTotals;
     const auto numbered = [&](const char *key, const char *totalKey, const QString &number, const QString &total) {
         put(key, number.trimmed().isEmpty() ? QString() : total.trimmed().isEmpty() ? number : number.trimmed() + "/" + total.trimmed());
         props.erase(totalKey);
+        if (number.trimmed().isEmpty() && !total.trimmed().isEmpty()) {
+            put(totalKey, total);
+            loneTotals.append({ key, total.trimmed() });
+        }
     };
     // a number or a total on its own (edited across several tracks at once) goes with the file's own other half
     const auto numbers = [&](const char *key, const char *totalKey, const QString &numberName, const QString &totalName) {
@@ -758,6 +769,15 @@ QString Library::saveTags(const QString &path, const QVariantMap &tags)
     numbers("TRACKNUMBER", "TRACKTOTAL", "trackNumber", "trackTotal");
     numbers("DISCNUMBER", "DISCTOTAL", "discNumber", "discTotal");
 
+    // a total on its own is a tag of its own (TRACKTOTAL: Vorbis comments' own, an ID3 TXXX frame), except in MP4, whose number field
+    // holds both: there it's "0/total", which players show as no number of that many. (ID3's own field can't: TagLib drops a 0 there.)
+    static const QStringList numberHoldsTotal = { "m4a", "mp4", "m4b", "aac", "alac" };
+    if (numberHoldsTotal.contains(QFileInfo(path).suffix().toLower())) {
+        for (const auto &[key, total] : loneTotals) {
+            props.erase(qstrcmp(key, "TRACKNUMBER") == 0 ? "TRACKTOTAL" : "DISCTOTAL");
+            put(key, "0/" + total);
+        }
+    }
     const TagLib::PropertyMap refused = file.setProperties(props);
     for (const auto &[name, key] : editableTags)
         if (tags.contains(name) && !tags[name].toString().trimmed().isEmpty() && refused.contains(key))
