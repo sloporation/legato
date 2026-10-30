@@ -36,7 +36,9 @@ qt_add_qml_module(legato
     QML_FILES
         qml/Main.qml
         qml/SettingsWindow.qml
+        qml/components/AlbumTile.qml
         qml/components/Card.qml
+        qml/components/FindField.qml
         qml/components/Icon.qml
         qml/components/PanelToggle.qml
         qml/components/PlayerBar.qml
@@ -47,11 +49,12 @@ qt_add_qml_module(legato
         qml/components/Theme.qml
         qml/components/TrackTable.qml
         qml/components/WheelScroll.qml
+        qml/views/AlbumView.qml
         qml/views/AlbumsView.qml
         qml/views/ArtistsView.qml
         qml/views/PlaylistView.qml
         qml/views/SongsView.qml
-    RESOURCES fonts/tabler-icons.ttf
+    RESOURCES fonts/tabler-icons.ttf icons/legato.png
     SOURCES settings.h settings.cpp library.h library.cpp folderwatcher.h folderwatcher.cpp player.h player.cpp
 )
 

@@ -31,6 +31,8 @@ QtObject {
     readonly property int tableRowHeight: 26
     readonly property int tableHeaderHeight: 28
     readonly property int albumTileMin: 160          // albums grid: tiles grow from this to fill the row
+    readonly property int albumTileText: 44          // under a tile's cover: the album and its artist
+    readonly property int artistListWidth: 240       // the artists page: the column of artists
     readonly property int radius: 6
     readonly property int toggleSize: 28
 

@@ -23,11 +23,20 @@ ApplicationWindow {
     palette.buttonText: Theme.text
     palette.highlight: Theme.accent
 
-    // "artists", "albums", "songs" or "playlist" (the .m3u at playlistPath)
+    // "artists" (showing artistName), "albums", "songs", "album" (the one at albumKey, opened from albumFrom) or "playlist" (the .m3u at
+    // playlistPath)
     property string page: "songs"
     property string playlistPath: ""
-    function openPage(name) { drawer.close(); page = name }
-    function openPlaylist(path) { drawer.close(); playlistPath = path; page = "playlist" }
+    property string albumKey: ""
+    property string albumFrom: "albums"
+    property string artistName: ""
+    // what the find field in the header holds, on the pages of tracks (songs, a playlist); a new page starts without it
+    property string filter: ""
+    readonly property bool canFilter: !noFolders && (page === "songs" || page === "playlist")
+    function openPage(name) { drawer.close(); filter = ""; page = name }
+    function openAlbum(key, from) { albumKey = key; albumFrom = from; page = "album" }
+    function back() { if (page === "album") page = albumFrom }
+    function openPlaylist(path) { drawer.close(); filter = ""; playlistPath = path; page = "playlist" }
     function newPlaylist() {
         const index = Library.createPlaylist(qsTr("New Playlist"))
         if (index >= 0) openPlaylist(Library.playlists[index].path)
@@ -69,14 +78,21 @@ ApplicationWindow {
         else drawer.open()
     }
     Shortcut { sequences: ["Ctrl+B"]; onActivated: root.toggleSidebar() }
+    // back from an album to the page it was opened from, as Cmd+[ in Apple Music and Finder
+    Shortcut { sequences: ["Ctrl+["]; enabled: root.page === "album"; onActivated: root.back() }
 
     readonly property var playlist: page === "playlist" ? Library.playlists.find(p => p.path === playlistPath) ?? null : null
-    readonly property string pageTitle: ({ artists: qsTr("Artists"), albums: qsTr("Albums"), songs: qsTr("Songs") })[page] ?? playlist?.name ?? ""
+    readonly property var album: page === "album" ? Library.albums.find(a => a.key === albumKey) ?? null : null
+    readonly property string pageTitle: ({ artists: qsTr("Artists"), albums: qsTr("Albums"), songs: qsTr("Songs") })[page] ?? playlist?.name ?? album?.title ?? ""
     function count(n, one, many) { return n + " " + (n === 1 ? one : many) }
-    readonly property string pageDetail: noFolders && page !== "artists" ? "" : (page === "songs" ? count(Library.tracks.length, qsTr("song"), qsTr("songs"))
+    // (filtered: how many of them are showing)
+    readonly property string shownOf: canFilter && filter.trim() !== "" && pageLoader.item?.matching ? pageLoader.item.matching.length + " " + qsTr("of") + " " : ""
+    readonly property string pageDetail: noFolders ? "" : shownOf + (page === "songs" ? count(Library.tracks.length, qsTr("song"), qsTr("songs"))
                                         : page === "albums" ? count(Library.albums.length, qsTr("album"), qsTr("albums"))
-                                        : playlist ? count(playlist.tracks.length, qsTr("song"), qsTr("songs")) : "")
-                                       + (Library.scanning && page !== "artists" ? " · " + qsTr("scanning…") : "")
+                                        : page === "artists" ? count(Library.artists.length, qsTr("artist"), qsTr("artists"))
+                                        : playlist ? count(playlist.tracks.length, qsTr("song"), qsTr("songs"))
+                                        : album ? album.artist : "")
+                                       + (Library.scanning ? " · " + qsTr("scanning…") : "")
     readonly property bool noFolders: Settings.musicDirs.length === 0
 
     RowLayout {
@@ -120,17 +136,33 @@ ApplicationWindow {
                         active: root.sidebarOpen
                         onClicked: root.toggleSidebar()
                     }
+                    PanelToggle {
+                        visible: root.page === "album"
+                        glyph: "chevron-left"
+                        label: root.albumFrom === "artists" ? qsTr("Back to Artists") : qsTr("Back to Albums")
+                        active: true
+                        onClicked: root.back()
+                    }
                     Label { text: root.pageTitle; font.bold: true; font.pixelSize: 15; elide: Text.ElideRight }
                     Label { text: root.pageDetail; opacity: 0.55; Layout.fillWidth: true; elide: Text.ElideRight }
+                    FindField {
+                        id: findField
+                        visible: root.canFilter
+                        Layout.preferredWidth: Math.min(240, root.width * 0.3)
+                        placeholderText: root.page === "playlist" ? qsTr("Find in Playlist") : qsTr("Find in Songs")
+                        text: root.filter
+                        onTextEdited: root.filter = text
+                    }
                 }
                 Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.hairline }
             }
 
             Loader {
+                id: pageLoader
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                sourceComponent: root.noFolders && root.page !== "artists" ? noFoldersPage
-                               : ({ artists: artistsPage, albums: albumsPage, songs: songsPage, playlist: playlistPage })[root.page]
+                sourceComponent: root.noFolders ? noFoldersPage
+                               : ({ artists: artistsPage, albums: albumsPage, songs: songsPage, album: albumPage, playlist: playlistPage })[root.page]
             }
 
             PlayerBar {
@@ -140,10 +172,20 @@ ApplicationWindow {
         }
     }
 
-    Component { id: artistsPage; ArtistsView {} }
-    Component { id: albumsPage; AlbumsView {} }
-    Component { id: songsPage; SongsView {} }
-    Component { id: playlistPage; PlaylistView { playlistPath: root.playlistPath } }
+    Component {
+        id: artistsPage
+        ArtistsView {
+            artistName: root.artistName
+            onSelected: name => root.artistName = name
+            onActivated: album => root.openAlbum(album.key, "artists")
+        }
+    }
+    Component { id: albumsPage; AlbumsView { onActivated: album => root.openAlbum(album.key, "albums") } }
+    Component { id: albumPage; AlbumView { albumKey: root.albumKey } }
+    Component { id: songsPage; SongsView { filter: root.filter; onFilterRequested: f => root.filter = f } }
+    Component { id: playlistPage; PlaylistView { playlistPath: root.playlistPath; filter: root.filter; onFilterRequested: f => root.filter = f } }
+    // Cmd+F (Ctrl+F) to find, as everywhere
+    Shortcut { sequences: [StandardKey.Find]; enabled: root.canFilter; onActivated: { findField.forceActiveFocus(); findField.selectAll() } }
 
     // first run: nothing to show until Legato is given a folder to look after
     Component {
@@ -175,7 +217,7 @@ ApplicationWindow {
     Component {
         id: sidebar
         Sidebar {
-            page: root.page
+            page: root.page === "album" ? root.albumFrom : root.page     // (an album belongs to the page it was opened from)
             playlistPath: root.playlistPath
             onOpenPage: name => root.openPage(name)
             onOpenPlaylist: path => root.openPlaylist(path)

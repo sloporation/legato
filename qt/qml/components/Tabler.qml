@@ -13,6 +13,7 @@ QtObject {
     readonly property var glyphs: ({
         "arrows-shuffle":    "",
         "chevron-down":      "",
+        "chevron-left":      "",
         "chevron-up":        "",
         "disc":              "",
         "file-text":         "",
@@ -30,10 +31,12 @@ QtObject {
         "refresh":           "",
         "repeat":            "",
         "repeat-once":       "",
+        "search":            "",
         "settings":          "",
         "vinyl":             "",
         "volume":            "",
         "volume-2":          "",
-        "volume-3":          ""
+        "volume-3":          "",
+        "x":                 ""
     })
 }

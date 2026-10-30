@@ -3,18 +3,24 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import App
 
-// Edit a track's tags (right-click › Edit Info…, or Cmd+I). Saving writes them into the file itself; the library shows the change at
-// once. Only the fields that were changed are written, so nothing else in the file is touched.
-// TrackInfoDialog { id: info }  …  info.edit(track.path)
+// Edit a track's tags (right-click › Edit Info…, or Cmd+I), or several tracks' at once. Saving writes them into the files themselves; the
+// library shows the change at once. Only the fields that were changed are written, so nothing else in the files is touched. With several
+// tracks a field shows what they all have in common, or "Mixed"; the title and track number are each track's own, so they stay as they are.
+// TrackInfoDialog { id: info }  …  info.edit(track.path)  or  info.editMany(paths)
 Dialog {
     id: dialog
 
-    property string path: ""
-    property var original: ({})       // the tags as they were opened (Library.tagsForEditing)
+    property string path: ""          // the track, or the first of them (for the cover)
+    property var paths: []
+    readonly property bool multi: paths.length > 1
+    property var original: ({})       // the tags as they were opened (Library.tagsForEditing): with several, the ones they share, else ""
+    property var mixed: ({})          // with several: { key: true } for the tags they don't agree on
     property string error: ""
 
     function edit(path) {
         dialog.path = path
+        paths = [path]
+        mixed = {}
         original = Library.tagsForEditing(path)
         for (const f of fields)
             f.text = original[f.key] ?? ""
@@ -23,14 +29,39 @@ Dialog {
         titleField.forceActiveFocus()
         titleField.selectAll()
     }
+    function editMany(paths) {
+        if (paths.length === 1) { edit(paths[0]); return }
+        dialog.path = paths[0]
+        dialog.paths = paths
+        const all = paths.map(p => Library.tagsForEditing(p))
+        const shared = {}, differ = {}
+        for (const f of fields) {
+            const values = all.map(tags => String(tags[f.key] ?? ""))
+            if (values.every(v => v === values[0])) shared[f.key] = values[0]
+            else { shared[f.key] = ""; differ[f.key] = true }
+        }
+        original = shared
+        mixed = differ
+        for (const f of fields)
+            f.text = shared[f.key]
+        error = ""
+        open()
+        artistField.forceActiveFocus()
+        artistField.selectAll()
+    }
     readonly property var fields: [titleField, artistField, albumField, albumArtistField, genreField, dateField,
                                    trackField, trackTotalField, discField, discTotalField]
-    readonly property bool changed: fields.some(f => f.text !== (original[f.key] ?? ""))
+    readonly property bool changed: fields.some(f => f.enabled && f.text !== (original[f.key] ?? ""))
     function save() {
         if (!changed) { close(); return }
         const tags = {}
         for (const f of fields)
-            if (f.text !== (original[f.key] ?? "")) tags[f.key] = f.text
+            if (f.enabled && f.text !== (original[f.key] ?? "")) tags[f.key] = f.text
+        if (multi) {      // (each file keeps the other half of a number or total that was left alone)
+            error = Library.writeTagsMany(paths, tags)
+            if (error === "") close()
+            return
+        }
         // a number and its total are written together
         if ("trackTotal" in tags) tags.trackNumber = trackField.text
         if ("discTotal" in tags) tags.discNumber = discField.text
@@ -68,6 +99,8 @@ Dialog {
         required property string key
         Layout.fillWidth: true
         selectByMouse: true
+        placeholderText: dialog.mixed[key] ? qsTr("Mixed") : ""
+        opacity: enabled ? 1 : 0.5
         color: Theme.text
         placeholderTextColor: Theme.tint(Theme.text, 0.35)
         leftPadding: 8
@@ -112,7 +145,13 @@ Dialog {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
-                Label { Layout.fillWidth: true; text: titleField.text || qsTr("Untitled"); font.bold: true; font.pixelSize: 15; elide: Text.ElideRight }
+                Label {
+                    Layout.fillWidth: true
+                    text: dialog.multi ? qsTr("%1 Songs").arg(dialog.paths.length) : titleField.text || qsTr("Untitled")
+                    font.bold: true
+                    font.pixelSize: 15
+                    elide: Text.ElideRight
+                }
                 Label { Layout.fillWidth: true; text: [artistField.text, albumField.text].filter(s => s).join(" — "); opacity: 0.6; elide: Text.ElideRight; visible: text !== "" }
             }
         }
@@ -124,13 +163,13 @@ Dialog {
             rowSpacing: 8
 
             FieldLabel { text: qsTr("Title") }
-            Field { id: titleField; key: "title" }
+            Field { id: titleField; key: "title"; enabled: !dialog.multi }
             FieldLabel { text: qsTr("Artist") }
             Field { id: artistField; key: "artist" }
             FieldLabel { text: qsTr("Album") }
             Field { id: albumField; key: "album" }
             FieldLabel { text: qsTr("Album Artist") }
-            Field { id: albumArtistField; key: "albumArtist"; placeholderText: artistField.text }
+            Field { id: albumArtistField; key: "albumArtist"; placeholderText: dialog.mixed.albumArtist ? qsTr("Mixed") : artistField.text }
             FieldLabel { text: qsTr("Genre") }
             Field { id: genreField; key: "genre" }
             FieldLabel { text: qsTr("Year") }
@@ -144,7 +183,7 @@ Dialog {
             FieldLabel { text: qsTr("Track") }
             RowLayout {
                 spacing: 6
-                NumberField { id: trackField; key: "trackNumber" }
+                NumberField { id: trackField; key: "trackNumber"; enabled: !dialog.multi }
                 Label { text: qsTr("of"); opacity: 0.6 }
                 NumberField { id: trackTotalField; key: "trackTotal" }
                 Item { Layout.preferredWidth: 18 }
@@ -156,9 +195,10 @@ Dialog {
         }
 
         // the file itself
-        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.hairline }
+        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.hairline; visible: !dialog.multi }
         ColumnLayout {
             Layout.fillWidth: true
+            visible: !dialog.multi
             spacing: 2
             Label {
                 Layout.fillWidth: true

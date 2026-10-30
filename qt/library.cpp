@@ -13,6 +13,7 @@
 #include <QHash>
 #include <QImage>
 #include <QQmlEngine>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 #include <QStandardPaths>
@@ -79,6 +80,11 @@ QVariantMap readTags(const QString &path)
     t["discNumber"] = leadingNumber(props, "DISCNUMBER");
     const TagLib::StringList albumArtist = props["ALBUMARTIST"];
     t["albumArtist"] = albumArtist.isEmpty() ? QString() : qs(albumArtist.front()).trimmed();
+    QStringList artists;     // (Picard and others write one name per value)
+    for (const TagLib::String &name : props["ARTISTS"])
+        if (!qs(name).trimmed().isEmpty())
+            artists << qs(name).trimmed();
+    t["artists"] = artists;
     t["duration"] = file.audioProperties() ? file.audioProperties()->lengthInMilliseconds() / 1000.0 : 0.0;
     return t;
 }
@@ -95,7 +101,7 @@ struct TagCache {
     QHash<QString, Entry> entries;     // pathKey -> entry
 
     static constexpr quint32 magic = 0x4c544331;   // "LTC1"
-    static constexpr qint32 version = 2;           // bump when the tags kept (or how they are read) change
+    static constexpr qint32 version = 3;           // bump when the tags kept (or how they are read) change
 
     static QString path()
     {
@@ -239,6 +245,7 @@ void Library::startScan(bool fresh, bool shown)
     if (fresh) {
         m_tracks.clear();
         m_albums.clear();
+        m_artists.clear();
         emit tracksChanged();
     }
 
@@ -358,6 +365,42 @@ void Library::addTracks(const QVariantList &batch)
     emit tracksChanged();
 }
 
+namespace {
+
+// which album a track is on: its album artist (else its artist) and album title, ignoring case
+QString albumArtistOf(const QVariantMap &t)
+{
+    return t["albumArtist"].toString().isEmpty() ? t["artist"].toString() : t["albumArtist"].toString();
+}
+QString albumKey(const QVariantMap &t)
+{
+    return albumArtistOf(t).toCaseFolded() + QChar(0x1f) + t["album"].toString().toCaseFolded();
+}
+
+} // namespace
+
+QVariantList Library::albumTracks(const QString &key) const
+{
+    QVariantList tracks;
+    for (const QVariant &v : std::as_const(m_tracks))
+        if (albumKey(v.toMap()) == key)
+            tracks << v;
+    QCollator collator;
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    collator.setNumericMode(true);
+    std::stable_sort(tracks.begin(), tracks.end(), [&](const QVariant &a, const QVariant &b) {
+        const QVariantMap x = a.toMap(), y = b.toMap();
+        const int dx = qMax(1, x["discNumber"].toInt()), dy = qMax(1, y["discNumber"].toInt());
+        if (dx != dy) return dx < dy;
+        // (numbered tracks first)
+        const uint tx = x["trackNumber"].toInt() > 0 ? x["trackNumber"].toUInt() : UINT_MAX;
+        const uint ty = y["trackNumber"].toInt() > 0 ? y["trackNumber"].toUInt() : UINT_MAX;
+        if (tx != ty) return tx < ty;
+        return collator.compare(x["title"].toString(), y["title"].toString()) < 0;
+    });
+    return tracks;
+}
+
 void Library::rebuildAlbums()
 {
     struct Album { QVariantMap info; int disc = INT_MAX, track = INT_MAX; };
@@ -365,20 +408,25 @@ void Library::rebuildAlbums()
     QList<QString> order;
     for (const QVariant &v : std::as_const(m_tracks)) {
         const QVariantMap t = v.toMap();
-        const QString artist = t["albumArtist"].toString().isEmpty() ? t["artist"].toString() : t["albumArtist"].toString();
+        const QString artist = albumArtistOf(t);
         const QString title = t["album"].toString().isEmpty() ? tr("Unknown Album") : t["album"].toString();
-        const QString key = artist.toCaseFolded() + QChar(0x1f) + title.toCaseFolded();
+        const QString key = albumKey(t);
         auto it = byKey.find(key);
         if (it == byKey.end()) {
             order << key;
             it = byKey.insert(key, Album());
+            it->info["key"] = key;
             it->info["title"] = title;
             it->info["artist"] = artist.isEmpty() ? tr("Unknown Artist") : artist;
             it->info["genre"] = t["genre"];
             it->info["year"] = 0;
             it->info["trackCount"] = 0;
+            it->info["duration"] = 0.0;
         }
         it->info["trackCount"] = it->info["trackCount"].toInt() + 1;
+        if (it->info["genre"].toString().isEmpty())     // the first track that has one
+            it->info["genre"] = t["genre"];
+        it->info["duration"] = it->info["duration"].toDouble() + t["duration"].toDouble();
         it->info["year"] = qMax(it->info["year"].toInt(), t["year"].toInt());
         // the cover comes from the album's first track
         const int disc = qMax(1, t["discNumber"].toInt()), track = t["trackNumber"].toInt();     // no disc number: disc 1
@@ -400,6 +448,155 @@ void Library::rebuildAlbums()
     m_albums.clear();
     for (const QString &key : std::as_const(order))
         m_albums << byKey[key].info;
+    rebuildArtists();
+}
+
+namespace {
+
+// The artists a credit names: lead (whose track or album it is) and featured. "A feat. B", "A ft. B", "A featuring B", "A with B" and
+// "A (feat. B)" feature B. "A; B", "A / B", "A vs. B" and "A x B" are always two artists. "A & B" and "A, B" are two only when the
+// whole is not a name in its own right, that is an album artist or an ARTISTS value somewhere (Simon & Garfunkel; Earth, Wind & Fire).
+// Nothing checks the names: it is only what the tags say.
+struct Credit { QStringList lead, featured; };
+
+const QRegularExpression bracketedFeature(R"(\s*[(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s+([^)\]]+)[)\]])",
+                                          QRegularExpression::CaseInsensitiveOption);
+const QRegularExpression featuring(R"(\s+(?:feat\.?|ft\.?|featuring|with)\s+)", QRegularExpression::CaseInsensitiveOption);
+const QRegularExpression together(R"(\s*;\s*|\s+/\s+|\s+vs\.?\s+|\s+x\s+|\s+(?:feat\.?|ft\.?|featuring|with)\s+)",
+                                  QRegularExpression::CaseInsensitiveOption);
+const QRegularExpression andOrComma(R"(\s*,\s*|\s+&\s+)");
+
+void addNames(const QString &part, const QSet<QString> &known, QStringList &out)
+{
+    for (const QString &piece : part.split(together, Qt::SkipEmptyParts)) {
+        const QString whole = piece.simplified();
+        if (whole.isEmpty())
+            continue;
+        if (known.contains(whole.toCaseFolded())) {
+            out << whole;
+            continue;
+        }
+        for (const QString &name : whole.split(andOrComma, Qt::SkipEmptyParts))
+            if (!name.simplified().isEmpty())
+                out << name.simplified();
+    }
+}
+
+// who "(feat. B)" in a title or credit names
+QStringList bracketedFeatures(const QString &text, const QSet<QString> &known)
+{
+    QStringList names;
+    for (auto it = bracketedFeature.globalMatch(text); it.hasNext();)
+        addNames(it.next().captured(1), known, names);
+    return names;
+}
+
+Credit splitCredit(QString credit, const QSet<QString> &known)
+{
+    Credit c;
+    credit = credit.simplified();
+    if (credit.isEmpty())
+        return c;
+    c.featured = bracketedFeatures(credit, known);
+    credit.remove(bracketedFeature);
+    const QRegularExpressionMatch m = featuring.match(credit);
+    addNames(m.hasMatch() ? credit.left(m.capturedStart()) : credit, known, c.lead);
+    if (m.hasMatch())
+        addNames(credit.mid(m.capturedEnd()), known, c.featured);
+    return c;
+}
+
+// "The Beatles" sorts with the Bs, as in Apple Music
+QString artistSortName(const QString &name)
+{
+    return name.startsWith("The ", Qt::CaseInsensitive) && name.size() > 4 ? name.mid(4) : name;
+}
+
+} // namespace
+
+void Library::rebuildArtists()
+{
+    QSet<QString> known;     // names that are not split at "&" or ","
+    for (const QVariant &v : std::as_const(m_tracks)) {
+        const QVariantMap t = v.toMap();
+        if (!t["albumArtist"].toString().isEmpty())
+            known << t["albumArtist"].toString().simplified().toCaseFolded();
+        for (const QString &name : t["artists"].toStringList())
+            known << name.simplified().toCaseFolded();
+    }
+    QHash<QString, int> albumIndex;
+    for (int i = 0; i < m_albums.size(); i++)
+        albumIndex.insert(m_albums[i].toMap()["key"].toString(), i);
+
+    struct Artist { QString name; QSet<int> own; QHash<int, QVariantList> other; int songs = 0; };     // other: album -> their track ids
+    QHash<QString, Artist> byName;     // case-folded name -> artist, spelt as first seen
+    for (const QVariant &v : std::as_const(m_tracks)) {
+        const QVariantMap t = v.toMap();
+        const int album = albumIndex.value(albumKey(t), -1);
+        QSet<QString> credited;
+        const auto credit = [&](const QString &name, bool own) {
+            const QString key = name.toCaseFolded();
+            auto it = byName.find(key);
+            if (it == byName.end())
+                it = byName.insert(key, Artist { name });
+            if (own)
+                it->own.insert(album);
+            else if (!it->other[album].contains(t["id"]))
+                it->other[album] << t["id"];
+            credited << key;
+        };
+        const QString albumArtist = albumArtistOf(t);
+        if (albumArtist.isEmpty()) {
+            credit(tr("Unknown Artist"), true);
+        } else {
+            const Credit c = splitCredit(albumArtist, known);
+            for (const QString &name : c.lead) credit(name, true);
+            for (const QString &name : c.featured) credit(name, false);
+        }
+        const Credit c = splitCredit(t["artist"].toString(), known);
+        for (const QString &name : c.lead + c.featured + bracketedFeatures(t["title"].toString(), known) + t["artists"].toStringList())
+            credit(name.simplified(), false);
+        for (const QString &key : std::as_const(credited))
+            byName[key].songs++;
+    }
+
+    QCollator collator;
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    collator.setNumericMode(true);
+    const auto albumList = [&](const QList<int> &indexes, const QHash<int, QVariantList> &trackIds) {
+        QVariantList albums;
+        for (const int i : indexes) {
+            if (i < 0)
+                continue;
+            QVariantMap album = m_albums[i].toMap();
+            if (trackIds.contains(i))
+                album["trackIds"] = trackIds[i];
+            albums << album;
+        }
+        std::sort(albums.begin(), albums.end(), [&](const QVariant &a, const QVariant &b) {
+            const QVariantMap x = a.toMap(), y = b.toMap();
+            if (x["year"].toInt() != y["year"].toInt()) return x["year"].toInt() > y["year"].toInt();
+            return collator.compare(x["title"].toString(), y["title"].toString()) < 0;
+        });
+        return albums;
+    };
+    QList<Artist> artists = byName.values();
+    std::sort(artists.begin(), artists.end(), [&](const Artist &a, const Artist &b) {
+        return collator.compare(artistSortName(a.name), artistSortName(b.name)) < 0;
+    });
+    m_artists.clear();
+    for (const Artist &a : std::as_const(artists)) {
+        QList<int> others;
+        for (auto it = a.other.cbegin(); it != a.other.cend(); ++it)
+            if (!a.own.contains(it.key()))
+                others << it.key();
+        const QVariantList albums = albumList(a.own.values(), {}), appearsOn = albumList(others, a.other);
+        const QVariantList &first = albums.isEmpty() ? appearsOn : albums;
+        m_artists << QVariantMap {
+            { "name", a.name }, { "albums", albums }, { "appearsOn", appearsOn }, { "songCount", a.songs },
+            { "featuredOnly", albums.isEmpty() }, { "cover", first.isEmpty() ? QVariant() : first.front().toMap()["cover"] },
+        };
+    }
 }
 
 void Library::setPlaylists(QVariantList playlists)
@@ -501,6 +698,35 @@ QVariantMap Library::tagsForEditing(const QString &path) const
 
 QString Library::writeTags(const QString &path, const QVariantMap &tags)
 {
+    const QString error = saveTags(path, tags);
+    if (error.isEmpty())
+        showEdits({ path });
+    return error;
+}
+
+QString Library::writeTagsMany(const QStringList &paths, const QVariantMap &tags)
+{
+    QStringList saved, failed;
+    QString why;
+    for (const QString &path : paths) {
+        const QString error = saveTags(path, tags);
+        if (error.isEmpty()) {
+            saved << path;
+        } else {
+            failed << QFileInfo(path).fileName();
+            why = error;
+        }
+    }
+    showEdits(saved);
+    if (failed.isEmpty())
+        return QString();
+    if (failed.size() == 1)
+        return tr("%1: %2").arg(failed.front(), why);
+    return tr("%n file(s) couldn't be changed (%1, …): %2", nullptr, failed.size()).arg(failed.front(), why);
+}
+
+QString Library::saveTags(const QString &path, const QVariantMap &tags)
+{
     TagLib::FileRef file = openFile(path, false);
     if (file.isNull())
         return tr("Legato can't read the tags of this file.");
@@ -522,10 +748,17 @@ QString Library::writeTags(const QString &path, const QVariantMap &tags)
         put(key, number.trimmed().isEmpty() ? QString() : total.trimmed().isEmpty() ? number : number.trimmed() + "/" + total.trimmed());
         props.erase(totalKey);
     };
-    if (tags.contains("trackNumber"))
-        numbered("TRACKNUMBER", "TRACKTOTAL", tags["trackNumber"].toString(), tags["trackTotal"].toString());
-    if (tags.contains("discNumber"))
-        numbered("DISCNUMBER", "DISCTOTAL", tags["discNumber"].toString(), tags["discTotal"].toString());
+    // a number or a total on its own (edited across several tracks at once) goes with the file's own other half
+    const auto numbers = [&](const char *key, const char *totalKey, const QString &numberName, const QString &totalName) {
+        if (!tags.contains(numberName) && !tags.contains(totalName))
+            return;
+        const QString now = props[key].isEmpty() ? QString() : qs(props[key].front());
+        const QString nowTotal = now.contains('/') ? now.section('/', 1, 1).trimmed() : props[totalKey].isEmpty() ? QString() : qs(props[totalKey].front());
+        numbered(key, totalKey, tags.contains(numberName) ? tags[numberName].toString() : now.section('/', 0, 0).trimmed(),
+                 tags.contains(totalName) ? tags[totalName].toString() : nowTotal);
+    };
+    numbers("TRACKNUMBER", "TRACKTOTAL", "trackNumber", "trackTotal");
+    numbers("DISCNUMBER", "DISCTOTAL", "discNumber", "discTotal");
 
     const TagLib::PropertyMap refused = file.setProperties(props);
     for (const auto &[name, key] : editableTags)
@@ -533,23 +766,32 @@ QString Library::writeTags(const QString &path, const QVariantMap &tags)
             qWarning().noquote() << "legato:" << path << "can't hold" << key;
     if (!file.save())
         return tr("Couldn't save the tags into the file.");
+    return QString();
+}
 
-    // show it now rather than at the next scan (which will find the file changed and read it again anyway)
-    const QVariantMap fresh = readTags(path);
-    const QString key = pathKey(path);
+// show the files' new tags now rather than at the next scan (which will find them changed and read them again anyway)
+void Library::showEdits(const QStringList &paths)
+{
+    if (paths.isEmpty())
+        return;
+    QHash<QString, QVariantMap> fresh;
+    for (const QString &path : paths)
+        fresh.insert(pathKey(path), readTags(path));
+    QVariantList edited;
     for (int i = 0; i < m_tracks.size(); i++) {
         QVariantMap track = m_tracks[i].toMap();
-        if (pathKey(track["path"].toString()) != key)
+        const auto it = fresh.constFind(pathKey(track["path"].toString()));
+        if (it == fresh.cend())
             continue;
-        for (auto it = fresh.cbegin(); it != fresh.cend(); ++it)
-            track[it.key()] = it.value();
+        for (auto tag = it->cbegin(); tag != it->cend(); ++tag)
+            track[tag.key()] = tag.value();
         m_tracks[i] = track;
-        rebuildAlbums();
-        emit tracksChanged();
-        emit trackEdited(track);
-        break;
+        edited << track;
     }
-    return QString();
+    rebuildAlbums();
+    emit tracksChanged();
+    for (const QVariant &track : std::as_const(edited))
+        emit trackEdited(track.toMap());
 }
 
 void Library::reveal(const QString &path) const

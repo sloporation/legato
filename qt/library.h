@@ -23,10 +23,16 @@ class Library : public QObject {
     Q_OBJECT
     QML_ELEMENT
     QML_SINGLETON
-    // [{ id, path, title, artist, album, albumArtist, genre, year, trackNumber, discNumber, duration (seconds) }], id = index
+    // [{ id, path, title, artist, artists (the ARTISTS tag's names, if any), album, albumArtist, genre, year, trackNumber, discNumber,
+    //    duration (seconds) }], id = index
     Q_PROPERTY(QVariantList tracks READ tracks NOTIFY tracksChanged)
-    // [{ title, artist, year, genre, trackCount, cover (an image: URL) }], by artist then title
+    // [{ key, title, artist, year, genre, trackCount, duration (s), cover (an image: URL) }], by artist then title
     Q_PROPERTY(QVariantList albums READ albums NOTIFY tracksChanged)
+    // [{ name, albums: [as in albums], appearsOn: [as in albums], songCount, featuredOnly, cover (its first album's) }], by name with any
+    // leading "The" aside. Anyone a track credits is an artist: the album artist, the track's artists, and anyone featured in its title.
+    // albums are the ones they are the album artist of, newest first; appearsOn the others they are on, each with trackIds: the tracks
+    // on it that credit them.
+    Q_PROPERTY(QVariantList artists READ artists NOTIFY tracksChanged)
     // [{ name, path, tracks: [track ids], missing (entries not found in the library) }], by name
     Q_PROPERTY(QVariantList playlists READ playlists NOTIFY playlistsChanged)
     Q_PROPERTY(bool scanning READ scanning NOTIFY scanningChanged)
@@ -37,6 +43,7 @@ public:
 
     QVariantList tracks() const { return m_tracks; }
     QVariantList albums() const { return m_albums; }
+    QVariantList artists() const { return m_artists; }
     QVariantList playlists() const { return m_playlists; }
     bool scanning() const { return m_thread != nullptr && m_showScan; }     // a scan nobody asked for runs unannounced
 
@@ -50,8 +57,13 @@ public:
     // Writes those tags (the same keys; "" removes one) into the file, leaving every other tag and the pictures as they were. The library
     // shows the change at once. Returns "" when it worked, else why not.
     Q_INVOKABLE QString writeTags(const QString &path, const QVariantMap &tags);
+    // the same tags into several files at once (each keeps its own track and disc numbers unless they are among the tags); "" when
+    // every file took them, else which did not and why
+    Q_INVOKABLE QString writeTagsMany(const QStringList &paths, const QVariantMap &tags);
     // the file in Finder (Explorer, the file manager), selected where the system allows it
     Q_INVOKABLE void reveal(const QString &path) const;
+    // an album's tracks (by its `key` from albums), in disc and track order, then by title for tracks with no number
+    Q_INVOKABLE QVariantList albumTracks(const QString &key) const;
 
 signals:
     void tracksChanged();
@@ -67,11 +79,15 @@ private:
     void stopScan();
     void addTracks(const QVariantList &batch);
     void setPlaylists(QVariantList playlists);
-    void rebuildAlbums();
+    QString saveTags(const QString &path, const QVariantMap &tags);     // into the file only; "" or why not
+    void showEdits(const QStringList &paths);     // the library takes the files' new tags
+    void rebuildAlbums();     // (and the artists, which are made of the albums)
+    void rebuildArtists();
 
     Settings *m_settings;
     QVariantList m_tracks;
     QVariantList m_albums;
+    QVariantList m_artists;
     QVariantList m_playlists;
     QThread *m_thread = nullptr;
     bool m_showScan = false;
