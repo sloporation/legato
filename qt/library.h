@@ -1,0 +1,80 @@
+#pragma once
+
+#include <QObject>
+#include <QQuickImageProvider>
+#include <QThread>
+#include <QTimer>
+#include <QVariantList>
+#include <QtQml/qqmlregistration.h>
+#include <atomic>
+
+#include "folderwatcher.h"
+
+class Settings;
+
+// The music in the folders Legato looks after, for QML as the `Library` singleton. The files are the library: the tags in them say what a
+// track is, and the playlists are the .m3u/.m3u8 files beside them. Nothing else is stored.
+//
+// A scan runs on a thread of its own. When the folders themselves change (in the settings window or in legato.yaml) it starts afresh and
+// hands the tracks over in batches as it finds them, so the table fills while it works. Otherwise it looks again quietly and swaps the
+// result in only if something is different: when the folders' contents change (a few seconds after the last change), every so often in
+// case a change went unnoticed (network drives often send no events), and on rescan().
+class Library : public QObject {
+    Q_OBJECT
+    QML_ELEMENT
+    QML_SINGLETON
+    // [{ id, path, title, artist, album, albumArtist, genre, year, trackNumber, discNumber, duration (seconds) }], id = index
+    Q_PROPERTY(QVariantList tracks READ tracks NOTIFY tracksChanged)
+    // [{ title, artist, year, genre, trackCount, cover (an image: URL) }], by artist then title
+    Q_PROPERTY(QVariantList albums READ albums NOTIFY tracksChanged)
+    // [{ name, path, tracks: [track ids], missing (entries not found in the library) }], by name
+    Q_PROPERTY(QVariantList playlists READ playlists NOTIFY playlistsChanged)
+    Q_PROPERTY(bool scanning READ scanning NOTIFY scanningChanged)
+public:
+    explicit Library(Settings *settings, QObject *parent = nullptr);
+    ~Library() override;
+    static Library *create(QQmlEngine *qml, QJSEngine *js);
+
+    QVariantList tracks() const { return m_tracks; }
+    QVariantList albums() const { return m_albums; }
+    QVariantList playlists() const { return m_playlists; }
+    bool scanning() const { return m_thread != nullptr && m_showScan; }     // a scan nobody asked for runs unannounced
+
+    Q_INVOKABLE void rescan();
+    // an empty playlist file in the first music folder; returns its index in playlists, or -1
+    Q_INVOKABLE int createPlaylist(const QString &name);
+
+signals:
+    void tracksChanged();
+    void playlistsChanged();
+    void scanningChanged();
+    void failed(const QString &message);
+
+private:
+    // fresh: start from an empty library and show tracks as they are found. Otherwise build it aside and swap it in at the end.
+    void startScan(bool fresh, bool shown);
+    void lookAgain();     // a change was seen, or it is time: a quiet scan, now or once the running one ends
+    void stopScan();
+    void addTracks(const QVariantList &batch);
+    void setPlaylists(QVariantList playlists);
+    void rebuildAlbums();
+
+    Settings *m_settings;
+    QVariantList m_tracks;
+    QVariantList m_albums;
+    QVariantList m_playlists;
+    QThread *m_thread = nullptr;
+    bool m_showScan = false;
+    bool m_lookAgain = false;      // something changed while a scan was running
+    FolderWatcher m_watcher;
+    QTimer m_settle;               // waits for a burst of changes (an album being copied in) to finish
+    QTimer m_periodic;
+    std::atomic<int> m_generation { 0 };   // bumped to tell a running scan its results are no longer wanted
+};
+
+// image://cover/<percent-encoded path of a track>: the picture embedded in the file, or a cover.jpg/folder.jpg beside it.
+class CoverProvider : public QQuickImageProvider {
+public:
+    CoverProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}
+    QImage requestImage(const QString &id, QSize *size, const QSize &requestedSize) override;
+};
