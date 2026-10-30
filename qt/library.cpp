@@ -2,6 +2,8 @@
 #include "settings.h"
 
 #include <QCollator>
+#include <QDesktopServices>
+#include <QProcess>
 #include <QDataStream>
 #include <QDir>
 #include <QDirIterator>
@@ -69,7 +71,10 @@ QVariantMap readTags(const QString &path)
     t["artist"] = tag ? qs(tag->artist()).trimmed() : QString();
     t["album"] = tag ? qs(tag->album()).trimmed() : QString();
     t["genre"] = tag ? qs(tag->genre()).trimmed() : QString();
-    t["year"] = tag ? int(tag->year()) : 0;
+    int year = tag ? int(tag->year()) : 0;
+    while (year > 9999)      // a whole date (20171030, as yt-dlp writes it): the year is its first four digits
+        year /= 10;
+    t["year"] = year;
     t["trackNumber"] = tag ? int(tag->track()) : 0;
     t["discNumber"] = leadingNumber(props, "DISCNUMBER");
     const TagLib::StringList albumArtist = props["ALBUMARTIST"];
@@ -90,7 +95,7 @@ struct TagCache {
     QHash<QString, Entry> entries;     // pathKey -> entry
 
     static constexpr quint32 magic = 0x4c544331;   // "LTC1"
-    static constexpr qint32 version = 1;           // bump when the tags kept change
+    static constexpr qint32 version = 2;           // bump when the tags kept (or how they are read) change
 
     static QString path()
     {
@@ -439,6 +444,123 @@ int Library::createPlaylist(const QString &name)
         if (m_playlists[i].toMap()["path"] == path)
             return i;
     return -1;
+}
+
+namespace {
+
+// the edit window's names, and the tag each one is (TagLib's names, which it maps onto ID3v2 frames, Vorbis comments, MP4 atoms, …)
+const QList<QPair<QString, const char *>> editableTags = {
+    { "title", "TITLE" }, { "artist", "ARTIST" }, { "album", "ALBUM" }, { "albumArtist", "ALBUMARTIST" },
+    { "genre", "GENRE" }, { "date", "DATE" },
+};
+
+QString firstValue(const TagLib::PropertyMap &props, const char *key)
+{
+    const TagLib::StringList values = props[key];
+    return values.isEmpty() ? QString() : qs(values.front());
+}
+
+// "3/12" -> ("3", "12")
+QPair<QString, QString> numberAndTotal(const TagLib::PropertyMap &props, const char *key)
+{
+    const QString value = firstValue(props, key);
+    return { value.section('/', 0, 0).trimmed(), value.section('/', 1).trimmed() };
+}
+
+} // namespace
+
+QVariantMap Library::tagsForEditing(const QString &path) const
+{
+    QVariantMap out;
+    TagLib::FileRef file = openFile(path, true);
+    if (file.isNull())
+        return out;
+    const TagLib::PropertyMap props = file.properties();
+    for (const auto &[name, key] : editableTags)
+        out[name] = firstValue(props, key);
+    const auto track = numberAndTotal(props, "TRACKNUMBER"), disc = numberAndTotal(props, "DISCNUMBER");
+    out["trackNumber"] = track.first;
+    out["trackTotal"] = track.second;
+    out["discNumber"] = disc.first;
+    out["discTotal"] = disc.second;
+    // also the totals some formats keep apart (Vorbis comments: TRACKTOTAL, DISCTOTAL)
+    if (track.second.isEmpty())
+        out["trackTotal"] = firstValue(props, "TRACKTOTAL");
+    if (disc.second.isEmpty())
+        out["discTotal"] = firstValue(props, "DISCTOTAL");
+
+    out["format"] = QFileInfo(path).suffix().toUpper();
+    if (const TagLib::AudioProperties *audio = file.audioProperties()) {
+        out["bitrate"] = audio->bitrate();
+        out["sampleRate"] = audio->sampleRate();
+        out["channels"] = audio->channels();
+        out["duration"] = audio->lengthInMilliseconds() / 1000.0;
+    }
+    return out;
+}
+
+QString Library::writeTags(const QString &path, const QVariantMap &tags)
+{
+    TagLib::FileRef file = openFile(path, false);
+    if (file.isNull())
+        return tr("Legato can't read the tags of this file.");
+    if (file.file()->readOnly())
+        return tr("The file can't be changed (it is read-only, or on a disk that is).");
+
+    TagLib::PropertyMap props = file.properties();     // everything already there, so only what was edited changes
+    const auto put = [&](const char *key, const QString &value) {
+        if (value.trimmed().isEmpty())
+            props.erase(key);
+        else
+            props.replace(key, TagLib::StringList(TagLib::String(value.trimmed().toStdString(), TagLib::String::UTF8)));
+    };
+    for (const auto &[name, key] : editableTags)
+        if (tags.contains(name))
+            put(key, tags[name].toString());
+    // numbers as "n/total", the form every format's readers understand; a separate total (Vorbis) goes, so it can't disagree
+    const auto numbered = [&](const char *key, const char *totalKey, const QString &number, const QString &total) {
+        put(key, number.trimmed().isEmpty() ? QString() : total.trimmed().isEmpty() ? number : number.trimmed() + "/" + total.trimmed());
+        props.erase(totalKey);
+    };
+    if (tags.contains("trackNumber"))
+        numbered("TRACKNUMBER", "TRACKTOTAL", tags["trackNumber"].toString(), tags["trackTotal"].toString());
+    if (tags.contains("discNumber"))
+        numbered("DISCNUMBER", "DISCTOTAL", tags["discNumber"].toString(), tags["discTotal"].toString());
+
+    const TagLib::PropertyMap refused = file.setProperties(props);
+    for (const auto &[name, key] : editableTags)
+        if (tags.contains(name) && !tags[name].toString().trimmed().isEmpty() && refused.contains(key))
+            qWarning().noquote() << "legato:" << path << "can't hold" << key;
+    if (!file.save())
+        return tr("Couldn't save the tags into the file.");
+
+    // show it now rather than at the next scan (which will find the file changed and read it again anyway)
+    const QVariantMap fresh = readTags(path);
+    const QString key = pathKey(path);
+    for (int i = 0; i < m_tracks.size(); i++) {
+        QVariantMap track = m_tracks[i].toMap();
+        if (pathKey(track["path"].toString()) != key)
+            continue;
+        for (auto it = fresh.cbegin(); it != fresh.cend(); ++it)
+            track[it.key()] = it.value();
+        m_tracks[i] = track;
+        rebuildAlbums();
+        emit tracksChanged();
+        emit trackEdited(track);
+        break;
+    }
+    return QString();
+}
+
+void Library::reveal(const QString &path) const
+{
+#if defined(Q_OS_MACOS)
+    QProcess::startDetached("open", { "-R", path });
+#elif defined(Q_OS_WIN)
+    QProcess::startDetached("explorer", { "/select,", QDir::toNativeSeparators(path) });
+#else
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));     // file managers differ in how to select one
+#endif
 }
 
 QImage CoverProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)

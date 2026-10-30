@@ -10,6 +10,8 @@ Card {
 
     readonly property var track: Player.current
     readonly property bool loaded: track.path !== undefined || track.url !== undefined
+    // some files don't say how long they are (a FLAC written to a pipe, a download cut short): it plays, but there is nothing to seek in
+    readonly property bool lengthKnown: Player.duration > 0
     readonly property bool compact: width < 640       // narrow: just the controls and the seek bar
 
     implicitHeight: 72
@@ -188,16 +190,20 @@ Card {
                 BarSlider {
                     id: seek
                     Layout.fillWidth: true
-                    enabled: bar.loaded
+                    enabled: bar.loaded && bar.lengthKnown
                     from: 0
                     to: Math.max(1, Player.duration)
                     // follows the track, except while it is being dragged; the jump happens on letting go
-                    Binding on value { value: Player.position; when: !seek.pressed; restoreMode: Binding.RestoreNone }
+                    Binding on value { value: bar.lengthKnown ? Player.position : 0; when: !seek.pressed; restoreMode: Binding.RestoreNone }
                     onPressedChanged: if (!pressed) Player.seek(value)
                     Accessible.name: qsTr("Position")
+                    HoverHandler { id: seekHover }
+                    ToolTip.visible: seekHover.hovered && bar.loaded && !bar.lengthKnown
+                    ToolTip.delay: 300
+                    ToolTip.text: qsTr("This file doesn't say how long it is, so it can't be skipped through. It may be damaged.")
                 }
                 Label {
-                    text: bar.loaded ? "-" + bar.formatTime(Player.duration - (seek.pressed ? seek.value : Player.position)) : ""
+                    text: !bar.loaded ? "" : bar.lengthKnown ? "-" + bar.formatTime(Player.duration - (seek.pressed ? seek.value : Player.position)) : "--:--"
                     font.pixelSize: 11
                     font.features: { "tnum": 1 }
                     opacity: 0.6

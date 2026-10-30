@@ -4,7 +4,8 @@ import App
 
 // A table of tracks, the way Apple Music shows them: a header to sort by (click again to reverse) and to resize the columns by their
 // right edge, striped rows that carry on past the last track, and a row picked by click or the arrow keys. The play button at the left of
-// a row, a double-click or Return plays from that track on: the Player gets the rows in the order they are shown.
+// a row, a double-click or Return plays from that track on: the Player gets the rows in the order they are shown. Right-click (or Cmd+I
+// for the selected one) to edit a track's tags.
 // When the columns are wider than the view, it scrolls sideways (trackpad, Shift+wheel, or the scroll bar), header and rows together.
 // TrackTable { tracks: Library.tracks }
 FocusScope {
@@ -22,20 +23,26 @@ FocusScope {
     }
 
     // Title (width 0) takes whatever room the others leave, until a column is resized: then every column keeps its width, and what is
-    // left over at the right stays empty, as in Apple Music.
+    // left over at the right stays empty, as in Apple Music. A column with `onlyWhen` shows only while the table is sorted by that key
+    // (the track number, beside the album when sorted by album); one with `sortable: false` does nothing when its heading is clicked.
     property var columns: [
         { key: "title",  title: qsTr("Title"),  width: 0,   align: Text.AlignLeft },
         { key: "duration", title: qsTr("Time"), width: 60,  align: Text.AlignRight },
         { key: "artist", title: qsTr("Artist"), width: 170, align: Text.AlignLeft },
         { key: "album",  title: qsTr("Album"),  width: 190, align: Text.AlignLeft },
+        { key: "trackNumber", title: "#",       width: 36,  align: Text.AlignRight, onlyWhen: "album", sortable: false },
         { key: "genre",  title: qsTr("Genre"),  width: 100, align: Text.AlignLeft },
         { key: "year",   title: qsTr("Year"),   width: 60,  align: Text.AlignRight }
     ]
     readonly property int minColumn: 40
     readonly property int minTitle: 140
-    readonly property real fixedWidth: columns.reduce((sum, c) => sum + c.width, 0)
+    function shown(i) { return columns[i].onlyWhen === undefined || columns[i].onlyWhen === sortKey }
+    readonly property real fixedWidth: columns.reduce((sum, c, i) => sum + (shown(i) ? c.width : 0), 0)
     readonly property int leadWidth: 30      // the play button, before the first column
-    function columnWidth(i) { return i === 0 && columns[0].width === 0 ? Math.max(minTitle, list.width - leadWidth - fixedWidth) : columns[i].width }
+    function columnWidth(i) {
+        if (!shown(i)) return 0
+        return i === 0 && columns[0].width === 0 ? Math.max(minTitle, list.width - leadWidth - fixedWidth) : columns[i].width
+    }
     function columnX(i) { let x = leadWidth; for (let k = 0; k < i; k++) x += columnWidth(k); return x }
     readonly property real columnsWidth: columnX(columns.length)
     readonly property real tableWidth: Math.max(list.width, columnsWidth)     // the rows' width: at least the view's
@@ -45,7 +52,8 @@ FocusScope {
         columns = c
     }
 
-    // sorted by a column; a tie keeps album order (album, disc, then track number), as Apple Music does. "" keeps the order given (a playlist's).
+    // sorted by a column; a tie keeps album order (album, its artist, disc, then track number), as Apple Music does, and then the title
+    // (for files with no track numbers). "" keeps the order given (a playlist's).
     property string sortKey: "artist"
     property bool ascending: true
     function sortBy(key) {
@@ -61,8 +69,11 @@ FocusScope {
         const blank = v => v === "" || v === 0
         const cmp = (a, b) => typeof a === "string" ? a.localeCompare(b, undefined, { sensitivity: "base", numeric: true }) : a - b
         const byKey = (a, b) => blank(a) !== blank(b) ? (blank(a) ? 1 : -1) : dir * cmp(a, b)
-        return tracks.slice().sort((a, b) => byKey(a[key], b[key]) || cmp(a.album, b.album)
-                                                 || (a.discNumber || 1) - (b.discNumber || 1) || a.trackNumber - b.trackNumber)
+        const albumArtist = t => t.albumArtist || t.artist
+        // (numbered tracks before unnumbered ones, as blanks go last)
+        const number = t => t.trackNumber > 0 ? t.trackNumber : Number.MAX_SAFE_INTEGER
+        return tracks.slice().sort((a, b) => byKey(a[key], b[key]) || cmp(a.album, b.album) || cmp(albumArtist(a), albumArtist(b))
+                                             || (a.discNumber || 1) - (b.discNumber || 1) || number(a) - number(b) || cmp(a.title, b.title))
     }
     function formatTime(seconds) {
         const s = Math.floor(seconds % 60)
@@ -71,8 +82,9 @@ FocusScope {
     function cell(track, key) {
         if (!track)      // a row on its way out while the rows are swapped
             return ""
-        if (key === "duration") return formatTime(track.duration)
+        if (key === "duration") return track.duration > 0 ? formatTime(track.duration) : ""    // 0: the file doesn't say (damaged, or written to a pipe)
         if (key === "year") return track.year > 0 ? track.year : ""
+        if (key === "trackNumber") return track.trackNumber > 0 ? track.trackNumber : ""
         return track[key]
     }
 
@@ -99,10 +111,11 @@ FocusScope {
                 x: table.columnX(index)
                 width: table.columnWidth(index)
                 height: header.height
+                visible: width > 0
 
                 Rectangle {
                     anchors.fill: parent
-                    color: headTap.pressed ? Theme.tint(Theme.text, Theme.selected) : headHover.hovered ? Theme.tint(Theme.text, Theme.hover) : "transparent"
+                    color: headTap.pressed ? Theme.tint(Theme.text, Theme.selected) : headHover.hovered && head.column.sortable !== false ? Theme.tint(Theme.text, Theme.hover) : "transparent"
                 }
                 Row {
                     anchors { verticalCenter: parent.verticalCenter; left: parent.left; right: parent.right; leftMargin: 8; rightMargin: 8 }
@@ -128,7 +141,7 @@ FocusScope {
                 Rectangle { anchors.right: parent.right; width: 1; height: parent.height - 10; anchors.verticalCenter: parent.verticalCenter; color: Theme.hairline }
 
                 HoverHandler { id: headHover }
-                TapHandler { id: headTap; onTapped: table.sortBy(head.column.key) }
+                TapHandler { id: headTap; enabled: head.column.sortable !== false; onTapped: table.sortBy(head.column.key) }
 
                 // drag the right edge to resize this column
                 MouseArea {
@@ -233,6 +246,7 @@ FocusScope {
                         readonly property var column: table.columns[index]
                         x: table.columnX(index) + 8
                         width: table.columnWidth(index) - 16
+                        visible: width > 0
                         height: row.height
                         verticalAlignment: Text.AlignVCenter
                         horizontalAlignment: column.align
@@ -269,7 +283,39 @@ FocusScope {
                     onTapped: { list.currentIndex = row.index; list.forceActiveFocus() }
                     onDoubleTapped: table.playFrom(row.index)
                 }
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: { list.currentIndex = row.index; list.forceActiveFocus(); rowMenu.popup() }
+                }
+                // (macOS: a Control-click is a right-click)
+                TapHandler {
+                    acceptedModifiers: Qt.ControlModifier
+                    enabled: Qt.platform.os === "osx"
+                    onTapped: { list.currentIndex = row.index; list.forceActiveFocus(); rowMenu.popup() }
+                }
             }
+        }
+
+        Menu {
+            id: rowMenu
+            readonly property var track: table.rows[list.currentIndex]
+            MenuItem {
+                text: rowMenu.track && Player.current.path === rowMenu.track.path && Player.playing ? qsTr("Pause") : qsTr("Play")
+                onTriggered: table.playOrPause(list.currentIndex)
+            }
+            MenuSeparator {}
+            MenuItem { text: qsTr("Edit Info…"); onTriggered: info.edit(rowMenu.track.path) }
+            MenuItem {
+                text: Qt.platform.os === "osx" ? qsTr("Show in Finder") : qsTr("Show in Folder")
+                onTriggered: Library.reveal(rowMenu.track.path)
+            }
+        }
+        TrackInfoDialog { id: info; objectName: "trackInfo" }
+        // Cmd+I (Ctrl+I elsewhere), as Get Info in Apple Music and Finder
+        Shortcut {
+            sequences: ["Ctrl+I"]
+            enabled: list.currentIndex >= 0 && !info.visible
+            onActivated: info.edit(table.rows[list.currentIndex].path)
         }
 
         Label {

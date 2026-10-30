@@ -44,11 +44,21 @@ public:
     // an empty playlist file in the first music folder; returns its index in playlists, or -1
     Q_INVOKABLE int createPlaylist(const QString &name);
 
+    // A file's tags as text, for the edit window: title, artist, album, albumArtist, genre, date, trackNumber, trackTotal, discNumber,
+    // discTotal; and about the file: format, bitrate (kbps), sampleRate (Hz), channels, duration (s).
+    Q_INVOKABLE QVariantMap tagsForEditing(const QString &path) const;
+    // Writes those tags (the same keys; "" removes one) into the file, leaving every other tag and the pictures as they were. The library
+    // shows the change at once. Returns "" when it worked, else why not.
+    Q_INVOKABLE QString writeTags(const QString &path, const QVariantMap &tags);
+    // the file in Finder (Explorer, the file manager), selected where the system allows it
+    Q_INVOKABLE void reveal(const QString &path) const;
+
 signals:
     void tracksChanged();
     void playlistsChanged();
     void scanningChanged();
     void failed(const QString &message);
+    void trackEdited(const QVariantMap &track);     // its tags were rewritten: anything holding a copy of it can refresh
 
 private:
     // fresh: start from an empty library and show tracks as they are found. Otherwise build it aside and swap it in at the end.

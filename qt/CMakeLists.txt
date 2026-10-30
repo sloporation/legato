@@ -43,6 +43,7 @@ qt_add_qml_module(legato
         qml/components/Sidebar.qml
         qml/components/SidebarRow.qml
         qml/components/Tabler.qml
+        qml/components/TrackInfoDialog.qml
         qml/components/Theme.qml
         qml/components/TrackTable.qml
         qml/components/WheelScroll.qml

@@ -58,6 +58,8 @@ public:
     Q_INVOKABLE void previous();        // back to the start of the track, or (near its start) the one before
     Q_INVOKABLE void seek(qreal seconds);
     Q_INVOKABLE void cycleRepeat();     // off → all → one → off, as the button does
+    // a track in the queue changed (its tags were edited): take the new details, by path, without interrupting anything
+    Q_INVOKABLE void updateTrack(const QVariantMap &track);
 
 signals:
     void currentChanged();

@@ -205,6 +205,8 @@ ApplicationWindow {
     // a short message at the bottom, when something could not be done
     Connections { target: Settings; function onFailed(message) { toast.show(message) } }
     Connections { target: Library; function onFailed(message) { toast.show(message) } }
+    // a track's tags were edited: the player's copy of it (in the now-playing bar) takes the change too
+    Connections { target: Library; function onTrackEdited(track) { Player.updateTrack(track) } }
     Rectangle {
         id: toast
         property string message: ""

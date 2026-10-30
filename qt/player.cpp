@@ -226,6 +226,25 @@ void Player::setRepeat(Repeat repeat)
     emit repeatChanged();
 }
 
+void Player::updateTrack(const QVariantMap &track)
+{
+    const QString path = track.value("path").toString();
+    bool changed = false;
+    for (QVariant &entry : m_queue) {
+        if (entry.toMap().value("path").toString() == path) {
+            entry = track;
+            changed = true;
+        }
+    }
+    if (!changed)
+        return;
+    emit queueChanged();
+    if (current().value("path").toString() == path) {
+        emit currentChanged();
+        emit durationChanged();
+    }
+}
+
 void Player::cycleRepeat()
 {
     setRepeat(m_repeat == RepeatOff ? RepeatAll : m_repeat == RepeatAll ? RepeatOne : RepeatOff);
