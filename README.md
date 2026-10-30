@@ -69,6 +69,29 @@ Again, this worked best for me. I hate 'live' inclusions in albums, so I just
 right click those, find in Finder and delete them from disk. My music library is 
 the files; I don't hoard stuff I don't listen to.
 
+## Pricing Notes & App Stores
+
+All AI usage is currently from my spare tokens. I pay for AI for work reasons 
+and building personal projects, and I burn through usage limits over the weekend
+on projects like Legato and Puddle.
+
+I don't pay for Github and because this app is open source, I don't have to pay 
+for Qt licensing or Github Actions.
+
+The only aspect of Legato that actually costs me money is the $149 per year 
+Apple Developer membership which I need in order to publish Legato to the App 
+Store.
+
+For this reason, Apple apps cost money to install via the App Store. 
+
+You're obviously more than welcome to download the source and compile the app 
+under your own free developer account. Any AI will get you moving on this.
+
+For Android, you can use [ObtainX](https://github.com/bikram-agarwal/ObtainX)
+which directly downloads Legato from this Github.
+
+For everything else, you can run the compiled app from Releases.
+
 ## Features
 
 **Legato Desktop**
