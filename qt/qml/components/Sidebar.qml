@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import App
 
 // The left-hand card: the library (artists, albums, songs), the phones plugged in (while there are any), then the playlists (the .m3u
-// files in the music folders). A "+" makes a new playlist. At the bottom, the settings.
+// files in the music folders). A "+" makes a new playlist, and songs dragged onto one are added to it. At the bottom, the settings.
 Card {
     id: bar
 
@@ -112,12 +112,24 @@ Card {
             ScrollBar.vertical: ScrollBar {}
             WheelScroll { view: playlists }
             delegate: SidebarRow {
+                id: playlistRow
                 required property var modelData
                 width: ListView.view.width
                 glyph: "playlist"
                 label: modelData.name
                 selected: bar.page === "playlist" && bar.playlistPath === modelData.path
+                dropTarget: drop.containsDrag
                 onClicked: bar.openPlaylist(modelData.path)
+                // songs dragged from a list: onto the end of this playlist
+                DropArea {
+                    id: drop
+                    anchors.fill: parent
+                    keys: ["application/x-legato-tracks"]
+                    onDropped: event => {
+                        Library.addToPlaylist(playlistRow.modelData.path, JSON.parse(event.getDataAsString("application/x-legato-tracks")))
+                        event.accept(Qt.CopyAction)
+                    }
+                }
             }
         }
 

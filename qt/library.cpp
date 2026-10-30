@@ -664,6 +664,66 @@ QPair<QString, QString> numberAndTotal(const TagLib::PropertyMap &props, const c
 
 } // namespace
 
+int Library::addToPlaylist(const QString &playlistPath, const QStringList &trackPaths)
+{
+    int index = -1;
+    for (int i = 0; i < m_playlists.size(); i++)
+        if (m_playlists[i].toMap()["path"] == playlistPath)
+            index = i;
+    if (index < 0)
+        return -1;
+    QVariantMap playlist = m_playlists[index].toMap();
+
+    QHash<QString, int> ids;
+    for (const QVariant &v : std::as_const(m_tracks)) {
+        const QVariantMap t = v.toMap();
+        ids.insert(pathKey(t["path"].toString()), t["id"].toInt());
+    }
+    QVariantList tracks = playlist["tracks"].toList();
+    QSet<int> already;
+    for (const QVariant &id : std::as_const(tracks))
+        already.insert(id.toInt());
+
+    // each as a path from the playlist's folder (as most players write them), else in full
+    const QDir base = QFileInfo(playlistPath).absoluteDir();
+    QByteArray lines;
+    int added = 0;
+    for (const QString &path : trackPaths) {
+        const auto id = ids.constFind(pathKey(path));
+        if (id == ids.constEnd() || already.contains(*id))
+            continue;
+        already.insert(*id);
+        const QString relative = base.relativeFilePath(path);
+        lines += (relative.startsWith("../") ? QDir::cleanPath(path) : relative).toUtf8() + '\n';
+        tracks << *id;
+        added++;
+    }
+    if (added == 0) {
+        emit failed(trackPaths.size() == 1 ? tr("It's already in “%1”.").arg(playlist["name"].toString())
+                                           : tr("They're already in “%1”.").arg(playlist["name"].toString()));
+        return 0;
+    }
+
+    QFile f(playlistPath);
+    if (!f.open(QIODevice::ReadWrite)) {
+        emit failed(tr("Couldn't change %1: %2").arg(QFileInfo(playlistPath).fileName(), f.errorString()));
+        return -1;
+    }
+    const QByteArray before = f.readAll();
+    if (!before.isEmpty() && !before.endsWith('\n'))
+        lines.prepend('\n');
+    if (f.write(lines) != lines.size()) {
+        emit failed(tr("Couldn't change %1: %2").arg(QFileInfo(playlistPath).fileName(), f.errorString()));
+        return -1;
+    }
+    f.close();
+
+    playlist["tracks"] = tracks;
+    m_playlists[index] = playlist;
+    emit playlistsChanged();
+    return added;
+}
+
 QVariantMap Library::tagsForEditing(const QString &path) const
 {
     QVariantMap out;

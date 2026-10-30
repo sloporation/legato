@@ -50,6 +50,9 @@ public:
     Q_INVOKABLE void rescan();
     // an empty playlist file in the first music folder; returns its index in playlists, or -1
     Q_INVOKABLE int createPlaylist(const QString &name);
+    // the tracks (files) onto the end of the playlist (its file), leaving out any already in it; how many were added, or -1 if the file
+    // couldn't be written (failed says why)
+    Q_INVOKABLE int addToPlaylist(const QString &playlistPath, const QStringList &trackPaths);
 
     // A file's tags as text, for the edit window: title, artist, album, albumArtist, genre, date, trackNumber, trackTotal, discNumber,
     // discTotal; and about the file: format, bitrate (kbps), sampleRate (Hz), channels, duration (s).
