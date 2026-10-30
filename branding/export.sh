@@ -22,5 +22,7 @@ if command -v iconutil >/dev/null; then
     done
     iconutil -c icns "$set_dir" -o "$root/qt/icons/legato.icns"
 fi
+# Android: the adaptive icon's foreground (its background is the colour in values/ic_launcher.xml)
+render "$root/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png" 432 foreground
 render "$here/icon-preview.png" 512 rounded
 echo "icons written"

@@ -28,6 +28,14 @@ A sync:
 
 The phone reads the manifest when it comes to the foreground, and when it changes while the app is open.
 
+## Desktop → Android (USB)
+
+Android phones take files over USB as MTP (they show up as a drive). The desktop writes the same `Legato/` folder as for the iPhone
+into the phone's shared storage, at `Music/Legato/`, the same way: changed files first, `manifest.json` last. Android only lets an app
+read such a folder once the person has chosen it in the system's folder picker, so Legato for Android asks once, on first launch (the
+picker opens at Music › Legato), and keeps that permission. It reads the manifest when it comes to the foreground and every few seconds
+while it's open, and plays the files where they are.
+
 ## `manifest.json`
 
 ```json

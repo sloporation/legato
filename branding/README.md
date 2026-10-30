@@ -16,4 +16,5 @@ which renders it (with Qt's SVG renderer, in `tools/`) into:
 | `qt/icons/legato.png` | Legato Desktop's window and Dock icon (the macOS shape: a rounded square with a margin) |
 | `qt/icons/legato.icns` | Legato.app's icon in Finder (made on macOS only, with iconutil) |
 | `qt/icons/legato-512.png` | the Linux AppImage's icon |
+| `android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png` | Legato for Android: the adaptive icon's foreground (the glyph, in the safe zone); the background is #7E302A in `values/ic_launcher.xml` |
 | `icon-preview.png` | a preview, rounded as on the iPhone |
