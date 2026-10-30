@@ -367,8 +367,6 @@ void Library::addTracks(const QVariantList &batch)
     emit tracksChanged();
 }
 
-namespace {
-
 // which album a track is on: its album artist (else its artist) and album title, ignoring case
 QString albumArtistOf(const QVariantMap &t)
 {
@@ -378,8 +376,6 @@ QString albumKey(const QVariantMap &t)
 {
     return albumArtistOf(t).toCaseFolded() + QChar(0x1f) + t["album"].toString().toCaseFolded();
 }
-
-} // namespace
 
 QVariantList Library::albumTracks(const QString &key) const
 {
@@ -807,9 +803,8 @@ void Library::reveal(const QString &path) const
 #endif
 }
 
-QImage CoverProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
+QImage coverImage(const QString &path)
 {
-    const QString path = QUrl::fromPercentEncoding(id.toUtf8());
     QImage image;
 
     TagLib::FileRef file = openFile(path, false);
@@ -834,6 +829,12 @@ QImage CoverProvider::requestImage(const QString &id, QSize *size, const QSize &
                 break;
         }
     }
+    return image;
+}
+
+QImage CoverProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
+{
+    QImage image = coverImage(QUrl::fromPercentEncoding(id.toUtf8()));
     if (image.isNull()) {
         // no picture: a blank one, so the view keeps its placeholder without a warning for every such album
         image = QImage(1, 1, QImage::Format_ARGB32);

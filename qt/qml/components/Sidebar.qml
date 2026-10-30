@@ -3,16 +3,18 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import App
 
-// The left-hand card: the library (artists, albums, songs), then the playlists (the .m3u files in the music folders). A "+" makes a new
-// playlist. At the bottom, the settings.
+// The left-hand card: the library (artists, albums, songs), the phones plugged in (while there are any), then the playlists (the .m3u
+// files in the music folders). A "+" makes a new playlist. At the bottom, the settings.
 Card {
     id: bar
 
-    // what the page is showing: "artists", "albums", "songs" or "playlist" (the one at playlistPath)
+    // what the page is showing: "artists", "albums", "songs", "playlist" (the one at playlistPath) or "device" (deviceId)
     property string page: ""
     property string playlistPath: ""
+    property string deviceId: ""
     signal openPage(string page)
     signal openPlaylist(string path)
+    signal openDevice(string id)
     signal newPlaylist()
     signal openSettings()
 
@@ -59,6 +61,21 @@ Card {
                 label: modelData[2]
                 selected: bar.page === modelData[0]
                 onClicked: bar.openPage(modelData[0])
+            }
+        }
+
+        SectionLabel { text: qsTr("Devices"); visible: Devices.devices.length > 0 }
+        Repeater {
+            model: Devices.devices
+            delegate: SidebarRow {
+                required property var modelData
+                Layout.fillWidth: true
+                Layout.leftMargin: 8
+                Layout.rightMargin: 8
+                glyph: "device-mobile"
+                label: modelData.name + (modelData.syncing ? " · " + qsTr("syncing") : "")
+                selected: bar.page === "device" && bar.deviceId === modelData.id
+                onClicked: bar.openDevice(modelData.id)
             }
         }
 

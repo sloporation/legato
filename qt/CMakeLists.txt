@@ -7,10 +7,18 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Quick QuickControls2 Multimedia Network)
 # TagLib 2 reads and writes the tags in the music files: macOS `brew install taglib`, Windows `vcpkg install taglib`; on Linux,
 # distributions that still ship 1.x (Ubuntu 24.04) need it built from source (see .github/workflows/build.yml).
 find_package(TagLib 2.0 REQUIRED)
+# Syncing to phones over USB (docs/sync.md): libimobiledevice for iPhones (through usbmuxd), libmtp for Android phones. Either can be
+# left out, and the app is built without that kind of phone: macOS `brew install pkgconf libimobiledevice libmtp`; Debian/Ubuntu
+# `pkg-config libimobiledevice-dev libmtp-dev`. (Windows has neither yet: libmtp isn't in vcpkg, and Windows talks MTP its own way.)
+find_package(PkgConfig)
+if(PkgConfig_FOUND)
+    pkg_check_modules(IMOBILEDEVICE IMPORTED_TARGET libimobiledevice-1.0 libplist-2.0)
+    pkg_check_modules(MTP IMPORTED_TARGET libmtp)
+endif()
 qt_standard_project_setup(REQUIRES 6.5)
 qt_policy(SET QTP0004 NEW)
 
@@ -53,14 +61,30 @@ qt_add_qml_module(legato
         qml/components/WheelScroll.qml
         qml/views/AlbumView.qml
         qml/views/AlbumsView.qml
+        qml/views/DeviceView.qml
         qml/views/ArtistsView.qml
         qml/views/PlaylistView.qml
         qml/views/SongsView.qml
     RESOURCES fonts/tabler-icons.ttf icons/legato.png
     SOURCES settings.h settings.cpp library.h library.cpp folderwatcher.h folderwatcher.cpp player.h player.cpp
+            devices.h devices.cpp devicestorage.h sync.h sync.cpp
 )
 
-target_link_libraries(legato PRIVATE legato_core Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia TagLib::TagLib)
+target_link_libraries(legato PRIVATE legato_core Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Network TagLib::TagLib)
+if(IMOBILEDEVICE_FOUND)
+    target_sources(legato PRIVATE iphonestorage.h iphonestorage.cpp)
+    target_link_libraries(legato PRIVATE PkgConfig::IMOBILEDEVICE)
+    target_compile_definitions(legato PRIVATE LEGATO_IPHONE)
+else()
+    message(STATUS "libimobiledevice not found: building without syncing to iPhones")
+endif()
+if(MTP_FOUND)
+    target_sources(legato PRIVATE androidstorage.h androidstorage.cpp)
+    target_link_libraries(legato PRIVATE PkgConfig::MTP)
+    target_compile_definitions(legato PRIVATE LEGATO_ANDROID)
+else()
+    message(STATUS "libmtp not found: building without syncing to Android phones")
+endif()
 if(APPLE)
     # FSEvents, for noticing changes in the music folders
     target_link_libraries(legato PRIVATE "-framework CoreServices")

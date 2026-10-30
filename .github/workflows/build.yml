@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
-        run: brew install qt libyaml taglib
+        run: brew install qt libyaml taglib pkgconf libimobiledevice libmtp
       - name: Build
         run: |
           cmake -S qt -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DLEGATO_VERSION=${{ needs.version.outputs.version }}
@@ -69,7 +69,7 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libyaml-dev ninja-build libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 libfuse2 zlib1g-dev
+          sudo apt-get install -y libyaml-dev pkg-config libimobiledevice-dev libmtp-dev ninja-build libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 libfuse2 zlib1g-dev
       - name: TagLib 2 (Ubuntu ships 1.x)
         run: |
           git clone --depth 1 --branch "$TAGLIB_VERSION" --recurse-submodules https://github.com/taglib/taglib.git /tmp/taglib

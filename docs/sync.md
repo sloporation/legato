@@ -28,9 +28,15 @@ A sync:
 
 The phone reads the manifest when it comes to the foreground, and when it changes while the app is open.
 
+Legato Desktop shows a phone in its sidebar under Devices while it is plugged in. Its page chooses what goes on it: everything, or some
+playlists, artists and albums; Sync does the rest. Files the phone can't play are left off (the iPhone takes MP3, AAC/ALAC, WAV, AIFF and
+FLAC; Android also Ogg Vorbis, Opus and Matroska audio). Covers are named after a hash of the JPEG, so a changed cover arrives as a new
+file. On Linux, iPhones need the `usbmuxd` service running. Windows can't sync yet.
+
 ## Desktop → Android (USB)
 
-Android phones take files over USB as MTP (they show up as a drive). The desktop writes the same `Legato/` folder as for the iPhone
+Android phones take files over USB as MTP (they show up as a drive), once their USB connection is set to "File transfer". The desktop
+uses libmtp, so another program holding the phone (Android File Transfer, a photo importer) has to let go first. It writes the same `Legato/` folder as for the iPhone
 into the phone's shared storage, at `Music/Legato/`, the same way: changed files first, `manifest.json` last. Android only lets an app
 read such a folder once the person has chosen it in the system's folder picker, so Legato for Android asks once, on first launch (the
 picker opens at Music › Legato), and keeps that permission. It reads the manifest when it comes to the foreground and every few seconds
@@ -63,7 +69,13 @@ while it's open, and plays the files where they are.
   ],
   "playlists": [
     { "name": "Rainy Day", "tracks": ["3f2a…", "…"] }    // in playlist order
-  ]
+  ],
+  "chosen": {                              // what was chosen for this phone on the desktop's Devices page, so the next sync
+    "everything": false,                   // (from any computer) starts from it; the phones ignore it
+    "playlists": ["Rainy Day"],
+    "artists": ["Avenged Sevenfold"],
+    "albums": ["avenged sevenfold\u001favenged sevenfold"]   // album artist and title, case-folded, joined by U+001F
+  }
 }
 ```
 

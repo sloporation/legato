@@ -98,7 +98,15 @@ private:
     std::atomic<int> m_generation { 0 };   // bumped to tell a running scan its results are no longer wanted
 };
 
-// image://cover/<percent-encoded path of a track>: the picture embedded in the file, or a cover.jpg/folder.jpg beside it.
+// a track's cover: the picture embedded in the file (the front cover, if one is marked as such), or a cover.jpg/folder.jpg beside it;
+// a null image if there is none
+QImage coverImage(const QString &trackPath);
+
+// albumArtist, else artist (a track map's); what the albums and artists are grouped by
+QString albumArtistOf(const QVariantMap &track);
+QString albumKey(const QVariantMap &track);
+
+// image://cover/<percent-encoded path of a track>: coverImage.
 class CoverProvider : public QQuickImageProvider {
 public:
     CoverProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}
