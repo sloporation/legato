@@ -1,5 +1,6 @@
 #include "library.h"
 #include "settings.h"
+#include "sync.h"
 
 #include <climits>
 
@@ -722,6 +723,186 @@ int Library::addToPlaylist(const QString &playlistPath, const QStringList &track
     m_playlists[index] = playlist;
     emit playlistsChanged();
     return added;
+}
+
+namespace {
+
+// a playlist file as entries: each line naming a file, with the comment lines (#EXTINF) just before it; what comes before the first
+// is kept as it is. track is the library's id, or -1 for an entry that isn't in the library.
+struct PlaylistFile {
+    QStringList preamble;
+    struct Entry { QStringList lines; int track; };
+    QList<Entry> entries;
+
+    static PlaylistFile read(const QString &path, const QHash<QString, int> &ids)
+    {
+        PlaylistFile p;
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+            return p;
+        const QDir base = QFileInfo(path).absoluteDir();
+        QStringList pending;
+        bool started = false;
+        for (const QByteArray &raw : f.readAll().split('\n')) {
+            QString line = QString::fromUtf8(raw);
+            if (line.endsWith('\r'))
+                line.chop(1);
+            const QString trimmed = line.trimmed();
+            if (trimmed.isEmpty() || trimmed.startsWith('#') || trimmed.startsWith(QChar(0xFEFF) + QString("#"))) {
+                if (!trimmed.isEmpty())
+                    (started || trimmed.startsWith("#EXTINF") ? pending : p.preamble) << line;
+                continue;
+            }
+            started = true;
+            QString entry = trimmed.startsWith("file:", Qt::CaseInsensitive) ? QUrl(trimmed).toLocalFile() : trimmed;
+            auto it = ids.constFind(pathKey(base.absoluteFilePath(entry)));
+            if (it == ids.constEnd() && entry.contains('\\'))
+                it = ids.constFind(pathKey(base.absoluteFilePath(entry.replace('\\', '/'))));
+            pending << line;
+            p.entries.append({ pending, it == ids.constEnd() ? -1 : *it });
+            pending.clear();
+        }
+        p.preamble << pending;     // (comments after the last entry)
+        return p;
+    }
+
+    int indexOf(int track) const
+    {
+        for (int i = 0; i < entries.size(); i++)
+            if (entries[i].track == track)
+                return i;
+        return -1;
+    }
+
+    bool write(const QString &path) const
+    {
+        QSaveFile f(path);
+        if (!f.open(QIODevice::WriteOnly))
+            return false;
+        QByteArray out;
+        for (const QString &line : preamble)
+            out += line.toUtf8() + '\n';
+        for (const Entry &e : entries)
+            for (const QString &line : e.lines)
+                out += line.toUtf8() + '\n';
+        return f.write(out) == out.size() && f.commit();
+    }
+};
+
+} // namespace
+
+QVariantMap Library::applyPhoneChanges(const QVariantList &changes)
+{
+    QStringList skipped;
+    int made = 0;
+    if (changes.isEmpty())
+        return { { "made", 0 }, { "skipped", skipped } };
+
+    // the phone's ids → the library's tracks
+    QHash<QString, int> byPath, bySyncId;
+    QHash<int, QString> pathOf;
+    for (const QVariant &v : std::as_const(m_tracks)) {
+        const QVariantMap t = v.toMap();
+        const QString path = t["path"].toString();
+        byPath.insert(pathKey(path), t["id"].toInt());
+        bySyncId.insert(syncId(path), t["id"].toInt());
+        pathOf.insert(t["id"].toInt(), path);
+    }
+    auto playlistPath = [&](const QString &name) {
+        for (const QVariant &v : std::as_const(m_playlists))
+            if (v.toMap()["name"].toString() == name)
+                return v.toMap()["path"].toString();
+        return QString();
+    };
+
+    QVariantList playlists = m_playlists;
+    auto refresh = [&](const QString &path) {     // (re-read, as the scan would)
+        for (QVariant &v : playlists)
+            if (v.toMap()["path"] == path)
+                v = readPlaylist(path, byPath);
+    };
+
+    for (const QVariant &v : changes) {
+        const QVariantMap c = v.toMap();
+        const QString op = c["op"].toString(), name = c["playlist"].toString();
+        const QString path = playlistPath(name);
+        if (op == "create") {
+            if (!path.isEmpty())
+                continue;
+            const QStringList dirs = m_settings->musicDirs();
+            const QString file = dirs.isEmpty() ? QString() : QDir(dirs.first()).filePath(name + ".m3u8");
+            QFile f(file);
+            if (file.isEmpty() || name.contains('/') || !f.open(QIODevice::WriteOnly | QIODevice::NewOnly) || f.write("#EXTM3U\n") < 0) {
+                skipped << tr("“%1” couldn't be made").arg(name);
+                continue;
+            }
+            f.close();
+            playlists << readPlaylist(file, byPath);
+            m_playlists = playlists;
+            made++;
+            continue;
+        }
+        if (path.isEmpty()) {
+            if (op != "delete")
+                skipped << tr("“%1” isn't on this computer any more").arg(name);
+            continue;
+        }
+        if (op == "rename") {
+            const QString to = c["to"].toString().trimmed();
+            const QString target = QFileInfo(path).dir().filePath(to + "." + QFileInfo(path).suffix());
+            if (to.isEmpty() || to.contains('/') || !playlistPath(to).isEmpty() || QFileInfo::exists(target) || !QFile::rename(path, target)) {
+                skipped << tr("“%1” couldn't be renamed “%2”").arg(name, to);
+                continue;
+            }
+            for (QVariant &p : playlists)
+                if (p.toMap()["path"] == path)
+                    p = readPlaylist(target, byPath);
+        } else if (op == "delete") {
+            if (!QFile::moveToTrash(path)) {
+                skipped << tr("“%1” couldn't be moved to the Trash").arg(name);
+                continue;
+            }
+            playlists.erase(std::remove_if(playlists.begin(), playlists.end(),
+                                           [&](const QVariant &p) { return p.toMap()["path"] == path; }), playlists.end());
+        } else {
+            const int track = bySyncId.value(c["track"].toString(), -1);
+            if (track < 0) {
+                skipped << tr("a song in “%1” isn't on this computer any more").arg(name);
+                continue;
+            }
+            PlaylistFile file = PlaylistFile::read(path, byPath);
+            const int at = file.indexOf(track);
+            if (op == "add") {
+                if (at >= 0)
+                    continue;
+                const QDir base = QFileInfo(path).absoluteDir();
+                const QString relative = base.relativeFilePath(pathOf.value(track));
+                file.entries.append({ { relative.startsWith("../") ? QDir::cleanPath(pathOf.value(track)) : relative }, track });
+            } else if (op == "remove") {
+                if (at < 0)
+                    continue;
+                file.entries.removeAt(at);
+            } else if (op == "move") {
+                if (at < 0)
+                    continue;
+                const auto entry = file.entries.takeAt(at);
+                const QString after = c["after"].toString();
+                const int afterAt = after.isEmpty() ? -1 : file.indexOf(bySyncId.value(after, -2));
+                file.entries.insert(after.isEmpty() ? 0 : afterAt >= 0 ? afterAt + 1 : at, entry);
+            } else {
+                continue;     // (a kind of change this version doesn't know)
+            }
+            if (!file.write(path)) {
+                skipped << tr("“%1” couldn't be changed").arg(name);
+                continue;
+            }
+            refresh(path);
+        }
+        m_playlists = playlists;     // (later changes look playlists up by name)
+        made++;
+    }
+    setPlaylists(playlists);
+    return { { "made", made }, { "skipped", skipped } };
 }
 
 QVariantMap Library::tagsForEditing(const QString &path) const

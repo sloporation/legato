@@ -53,6 +53,9 @@ public:
     // the tracks (files) onto the end of the playlist (its file), leaving out any already in it; how many were added, or -1 if the file
     // couldn't be written (failed says why)
     Q_INVOKABLE int addToPlaylist(const QString &playlistPath, const QStringList &trackPaths);
+    // Playlist changes made on a phone (docs/sync.md, "Phone → desktop": { op, playlist, to, track, after }, tracks by their sync id),
+    // made to the playlist files in order, each as far as it still can be. Returns { made: n, skipped: [why, for each left out] }.
+    QVariantMap applyPhoneChanges(const QVariantList &changes);
 
     // A file's tags as text, for the edit window: title, artist, album, albumArtist, genre, date, trackNumber, trackTotal, discNumber,
     // discTotal; and about the file: format, bitrate (kbps), sampleRate (Hz), channels, duration (s).

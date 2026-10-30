@@ -1,5 +1,6 @@
 package com.sloporation.legato
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** What is synced: `Legato/manifest.json`, written by Legato Desktop (docs/sync.md). Missing keys take their defaults; unknown ones are ignored. */
@@ -121,3 +122,69 @@ object Grouping {
 }
 
 private fun JSONObject.optStringOrNull(key: String): String? = if (has(key) && !isNull(key)) optString(key) else null
+
+/** A change made to the playlists on the phone, kept in `Legato/changes.json` until the next sync takes it to the desktop (docs/sync.md). */
+data class PlaylistChange(
+    val op: Op,
+    val playlist: String,
+    val to: String? = null,       // rename: the new name
+    val track: String? = null,    // add, remove, move: the track's id
+    val after: String? = null,    // move: the track it goes after; none, to the top
+    val at: String? = java.time.Instant.now().toString(),
+) {
+    enum class Op { create, rename, delete, add, remove, move }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("op", op.name)
+        put("playlist", playlist)
+        to?.let { put("to", it) }
+        track?.let { put("track", it) }
+        after?.let { put("after", it) }
+        at?.let { put("at", it) }
+    }
+
+    companion object {
+        /** The changes in a changes.json; unknown kinds of change are left out. */
+        fun parseLog(text: String): List<PlaylistChange> {
+            val list = runCatching { JSONObject(text).optJSONArray("changes") }.getOrNull() ?: return emptyList()
+            return (0 until list.length()).mapNotNull { i ->
+                val o = list.optJSONObject(i) ?: return@mapNotNull null
+                val op = runCatching { Op.valueOf(o.optString("op")) }.getOrNull() ?: return@mapNotNull null
+                fun str(key: String) = if (o.has(key) && !o.isNull(key)) o.getString(key) else null
+                PlaylistChange(op, o.optString("playlist"), str("to"), str("track"), str("after"), str("at"))
+            }
+        }
+
+        fun log(changes: List<PlaylistChange>): String =
+            JSONObject().put("version", 1).put("changes", JSONArray(changes.map { it.toJson() })).toString(2)
+    }
+}
+
+/** The playlists with the changes made, each as far as it still can be. */
+fun List<Playlist>.applying(changes: List<PlaylistChange>): List<Playlist> {
+    val lists = map { it.copy(tracks = it.tracks.toMutableList()) }.toMutableList()
+    for (c in changes) {
+        val i = lists.indexOfFirst { it.name == c.playlist }
+        val tracks = if (i >= 0) lists[i].tracks as MutableList<String> else null
+        when (c.op) {
+            PlaylistChange.Op.create -> if (i < 0) lists += Playlist(c.playlist, mutableListOf())
+            PlaylistChange.Op.rename -> if (i >= 0 && !c.to.isNullOrEmpty() && lists.none { it.name == c.to }) lists[i] = lists[i].copy(name = c.to)
+            PlaylistChange.Op.delete -> if (i >= 0) lists.removeAt(i)
+            PlaylistChange.Op.add -> if (tracks != null && c.track != null && c.track !in tracks) tracks += c.track
+            PlaylistChange.Op.remove -> if (tracks != null && c.track != null) tracks.remove(c.track)
+            PlaylistChange.Op.move -> {
+                if (tracks == null || c.track == null) continue
+                val from = tracks.indexOf(c.track)
+                if (from < 0) continue
+                tracks.removeAt(from)
+                val after = c.after?.let { tracks.indexOf(it) }
+                when {
+                    c.after == null -> tracks.add(0, c.track)
+                    after != null && after >= 0 -> tracks.add(after + 1, c.track)
+                    else -> tracks.add(from, c.track)     // (the one it went after is gone: it stays put)
+                }
+            }
+        }
+    }
+    return lists
+}

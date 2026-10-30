@@ -57,4 +57,43 @@ class ModelsTest {
         assertEquals(listOf("Ada Lune", "Northern Static"), artists.map { it.name })
         assertEquals(4, artists[0].tracks.size)
     }
+
+    // playlist changes made on the phone (docs/sync.md, "Phone → desktop")
+
+    private val base = listOf(Playlist("Rainy Day", listOf("a", "b", "c")), Playlist("Old", listOf("a")))
+
+    @Test fun eachKindOfChange() {
+        val lists = base.applying(listOf(
+            PlaylistChange(PlaylistChange.Op.create, "Gym"),
+            PlaylistChange(PlaylistChange.Op.add, "Gym", track = "c"),
+            PlaylistChange(PlaylistChange.Op.add, "Gym", track = "a"),
+            PlaylistChange(PlaylistChange.Op.move, "Gym", track = "a"),
+            PlaylistChange(PlaylistChange.Op.remove, "Rainy Day", track = "b"),
+            PlaylistChange(PlaylistChange.Op.move, "Rainy Day", track = "a", after = "c"),
+            PlaylistChange(PlaylistChange.Op.rename, "Gym", to = "Lifting"),
+            PlaylistChange(PlaylistChange.Op.delete, "Old"),
+        ))
+        assertEquals(listOf("Rainy Day", "Lifting"), lists.map { it.name })
+        assertEquals(listOf("c", "a"), lists[0].tracks)
+        assertEquals(listOf("a", "c"), lists[1].tracks)
+    }
+
+    @Test fun madeTwiceComesToTheSame() {
+        val changes = listOf(
+            PlaylistChange(PlaylistChange.Op.create, "Gym"),
+            PlaylistChange(PlaylistChange.Op.add, "Gym", track = "b"),
+            PlaylistChange(PlaylistChange.Op.remove, "Rainy Day", track = "a"),
+            PlaylistChange(PlaylistChange.Op.move, "Rainy Day", track = "c"),
+            PlaylistChange(PlaylistChange.Op.rename, "Old", to = "Older"),
+        )
+        val once = base.applying(changes)
+        assertEquals(once, once.applying(changes))
+    }
+
+    @Test fun theLogReadsBackWhatWasWritten() {
+        val text = PlaylistChange.log(listOf(PlaylistChange(PlaylistChange.Op.move, "R", track = "a"), PlaylistChange(PlaylistChange.Op.move, "R", track = "a", after = "c")))
+        val back = PlaylistChange.parseLog(text)
+        assertEquals(listOf(null, "c"), back.map { it.after })
+        assertEquals(PlaylistChange.Op.move, back[0].op)
+    }
 }

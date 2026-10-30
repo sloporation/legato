@@ -84,6 +84,39 @@ while it's open, and plays the files where they are.
 Albums and artists are not listed: both apps group the tracks themselves, the same way the desktop does (album artist, else artist, and
 the album title, ignoring case). Unknown keys are ignored and missing ones take their defaults, so either side can add fields.
 
+## Phone → desktop: playlist changes
+
+Playlists can be changed on the phone: made, renamed, deleted, and songs added, removed and moved. The phone doesn't touch the manifest
+for that (the desktop owns it); it writes what was done to `Legato/changes.json`, and shows the manifest's playlists with those changes
+made. The next sync takes them to the desktop's playlist files, before it works out what the phone is to have, so the new manifest has
+them in.
+
+```json
+{
+  "version": 1,
+  "changes": [                                                          // in the order they were made
+    { "op": "create", "playlist": "Gym",     "at": "2026-10-31T09:00:00Z" },
+    { "op": "add",    "playlist": "Gym",     "track": "3f2a…" },        // onto the end
+    { "op": "move",   "playlist": "Gym",     "track": "3f2a…", "after": "9c1e…" },   // no "after": to the top
+    { "op": "remove", "playlist": "Gym",     "track": "9c1e…" },
+    { "op": "rename", "playlist": "Gym",     "to": "Lifting" },
+    { "op": "delete", "playlist": "Old" }
+  ]
+}
+```
+
+Playlists are named, tracks are ids. A change is made only as far as it still can be: `create` of a playlist that is there, `add` of a
+song already in it, `remove` of one that isn't, `rename` or `delete` of a playlist that isn't there, do nothing. On the desktop that is also what happens to a change that no longer fits (the playlist was deleted there, the
+song is no longer in the library): it is left out, and the sync says so. Songs in a desktop playlist that aren't on the phone stay where
+they are; `move` places a song after the one named, wherever that is in the file. A playlist deleted on the phone goes to the desktop's
+Trash.
+
+So that nothing written on the phone during a sync is lost, the desktop first renames `changes.json` to `changes.applying.json` (adding
+its changes to one left over from a sync that didn't finish), makes the changes, writes how many it made into it (`"applied": 11`), and
+deletes it once the new manifest is written. A sync that finds `"applied"` in a left-over `changes.applying.json` makes only the changes
+after those: making a change twice needn't come to the same thing (`create` a playlist that was then renamed makes it again). The phone
+shows the manifest with the changes in `changes.applying.json` and then those in `changes.json` made.
+
 ## iPhone → Apple Watch (WatchConnectivity)
 
 The iPhone app keeps its own choice of playlists, albums and artists for the watch. Sending:

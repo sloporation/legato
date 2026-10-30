@@ -32,10 +32,13 @@ struct HomeView: View {
     }
 }
 
-/// The Playlists tab: the playlists synced from the desktop (its .m3u files), each opening its tracks in its own order.
+/// The Playlists tab: the playlists synced from the desktop (its .m3u files), each opening its tracks in its own order. + makes a new
+/// one; swiping or long-pressing one renames or deletes it. The desktop gets the changes at the next sync.
 struct PlaylistsView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(Navigator.self) private var navigator
+    @State private var naming: PlaylistNaming?
+    @State private var deleting: Playlist?
 
     var body: some View {
         List(library.playlists) { playlist in
@@ -53,16 +56,99 @@ struct PlaylistsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button { naming = .rename(playlist.name) } label: { Label("Rename…", systemImage: "pencil") }
+                Button(role: .destructive) { deleting = playlist } label: { Label("Delete", systemImage: "trash") }
+            }
+            .swipeActions {
+                Button(role: .destructive) { deleting = playlist } label: { Label("Delete", systemImage: "trash") }
+                Button { naming = .rename(playlist.name) } label: { Label("Rename", systemImage: "pencil") }
+            }
         }
         .listStyle(.plain)
         .overlay {
             if library.playlists.isEmpty {
                 ContentUnavailableView("No Playlists", systemImage: "music.note.list",
-                                       description: Text("Choose playlists to put on your iPhone in Legato on your computer."))
+                                       description: Text("Make one with +, or choose playlists to put on your iPhone in Legato on your computer."))
             }
         }
         .navigationTitle("Playlists")
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { naming = .create } label: { Image(systemName: "plus") }.accessibilityLabel("New Playlist")
+            }
+        }
+        .playlistNaming($naming)
+        .playlistDeleting($deleting)
         .withAppMenu()
+    }
+}
+
+/// Naming a playlist: a new one, or a new name for one.
+enum PlaylistNaming: Identifiable {
+    case create
+    case rename(String)
+    var id: String { if case .rename(let name) = self { "rename:" + name } else { "create" } }
+}
+
+private struct PlaylistNamingAlert: ViewModifier {
+    @Binding var naming: PlaylistNaming?
+    var renamed: (String) -> Void
+    @Environment(LibraryStore.self) private var library
+    @State private var name = ""
+
+    func body(content: Content) -> some View {
+        content
+            .alert(naming.map { if case .create = $0 { "New Playlist" } else { "Rename Playlist" } } ?? "",
+                   isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+                TextField("Name", text: $name)
+                Button("Cancel", role: .cancel) { naming = nil }
+                Button(naming.map { if case .create = $0 { "Create" } else { "Rename" } } ?? "") {
+                    switch naming {
+                    case .create:
+                        library.change(PlaylistChange(op: .create, playlist: library.freeName(name)))
+                    case .rename(let old):
+                        let trimmed = name.trimmingCharacters(in: .whitespaces)
+                        if !trimmed.isEmpty && trimmed != old {
+                            let new = library.freeName(trimmed)
+                            library.change(PlaylistChange(op: .rename, playlist: old, to: new))
+                            renamed(new)
+                        }
+                    case nil: break
+                    }
+                    naming = nil
+                }
+            }
+            .onChange(of: naming?.id) { _, _ in
+                if case .rename(let old) = naming { name = old } else { name = "" }
+            }
+    }
+}
+
+private struct PlaylistDeletingAlert: ViewModifier {
+    @Binding var deleting: Playlist?
+    var deleted: () -> Void
+    @Environment(LibraryStore.self) private var library
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog("Delete “\(deleting?.name ?? "")”?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                   titleVisibility: .visible) {
+            Button("Delete Playlist", role: .destructive) {
+                if let p = deleting { library.change(PlaylistChange(op: .delete, playlist: p.name)); deleted() }
+                deleting = nil
+            }
+        } message: {
+            Text("The songs stay. Your computer moves the playlist to the Trash at the next sync.")
+        }
+    }
+}
+
+extension View {
+    func playlistNaming(_ naming: Binding<PlaylistNaming?>, renamed: @escaping (String) -> Void = { _ in }) -> some View {
+        modifier(PlaylistNamingAlert(naming: naming, renamed: renamed))
+    }
+    func playlistDeleting(_ deleting: Binding<Playlist?>, deleted: @escaping () -> Void = {}) -> some View {
+        modifier(PlaylistDeletingAlert(deleting: deleting, deleted: deleted))
     }
 }
 
@@ -111,10 +197,13 @@ struct ArtistView: View {
     }
 }
 
-/// One playlist's tracks, in its own order.
+/// One playlist's tracks, in its own order. Edit puts them in a new one; the menu renames or deletes the playlist.
 struct PlaylistView: View {
     let name: String
     @Environment(LibraryStore.self) private var library
+    @Environment(Navigator.self) private var navigator
+    @State private var naming: PlaylistNaming?
+    @State private var deleting: Playlist?
 
     var body: some View {
         if let playlist = library.playlists.first(where: { $0.name == name }) {
@@ -123,6 +212,21 @@ struct PlaylistView: View {
                 PlayShuffleButtons(tracks: tracks)
             }
             .navigationTitle(playlist.name)
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if !tracks.isEmpty { EditButton() }
+                    Menu {
+                        Button { naming = .rename(name) } label: { Label("Rename…", systemImage: "pencil") }
+                        Button(role: .destructive) { deleting = playlist } label: { Label("Delete Playlist", systemImage: "trash") }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("Playlist")
+                }
+            }
+            // the page follows the playlist to its new name, and closes when it's gone
+            .playlistNaming($naming) { new in
+                if let last = navigator.path.indices.last { navigator.path[last] = .playlist(new) }
+            }
+            .playlistDeleting($deleting) { navigator.path.removeLast() }
         } else {
             ContentUnavailableView("This playlist is no longer on your iPhone", systemImage: "music.note.list")
         }

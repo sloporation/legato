@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// A list of tracks to play from: tapping one plays the list from there, in this order. Long-pressing one offers to play it, or to go to
-/// its album, its artist or a playlist it's in (leaving out the one this list already is). A header (an album's cover, Play and
-/// Shuffle) goes above the rows.
+/// A list of tracks to play from: tapping one plays the list from there, in this order. Long-pressing one offers to play it, to add it
+/// to a playlist, or to go to its album, its artist or a playlist it's in (leaving out the one this list already is). A header (an
+/// album's cover, Play and Shuffle) goes above the rows. A playlist's own list can also lose a track (swipe, or the long-press menu) and
+/// be put in a new order (Edit).
 struct TrackList<Header: View>: View {
     enum Style { case numbered, artwork }
 
@@ -15,6 +16,11 @@ struct TrackList<Header: View>: View {
     @Environment(Player.self) private var player
     @Environment(Navigator.self) private var navigator
     @Environment(LibraryStore.self) private var library
+    @State private var naming: Track?          // the track a new playlist is being named for
+    @State private var newName = ""
+
+    /// the playlist this list is, if it is one: its tracks can be removed and moved
+    private var playlistName: String? { if case .playlist(let name) = here { name } else { nil } }
 
     var body: some View {
         List {
@@ -27,6 +33,13 @@ struct TrackList<Header: View>: View {
                         .buttonStyle(.plain)
                         .contextMenu {
                             Button { player.play(tracks, from: index) } label: { Label("Play", systemImage: "play") }
+                            addToPlaylistMenu(track)
+                            if let playlistName {
+                                Button(role: .destructive) {
+                                    library.change(PlaylistChange(op: .remove, playlist: playlistName, track: track.id))
+                                } label: { Label("Remove from Playlist", systemImage: "minus.circle") }
+                            }
+                            Divider()
                             if here != .album(track.albumKey) {
                                 Button { navigator.go(.album(track.albumKey)) } label: { Label("Go to Album", systemImage: "square.stack") }
                             }
@@ -53,10 +66,54 @@ struct TrackList<Header: View>: View {
                             TrackPreview(track: track, library: library)
                         }
                 }
+                .onDelete(perform: playlistName == nil ? nil : { rows in
+                    for i in rows { library.change(PlaylistChange(op: .remove, playlist: playlistName!, track: tracks[i].id)) }
+                })
+                .onMove(perform: playlistName == nil ? nil : { rows, destination in
+                    // one at a time: each goes after the track that ends up before it
+                    var order = tracks.map(\.id)
+                    let moving = rows.map { order[$0] }
+                    order.move(fromOffsets: rows, toOffset: destination)
+                    for id in moving {
+                        let at = order.firstIndex(of: id)!
+                        library.change(PlaylistChange(op: .move, playlist: playlistName!, track: id, after: at > 0 ? order[at - 1] : nil))
+                    }
+                })
             }
         }
         .listStyle(.plain)
         .overlay { if tracks.isEmpty { ContentUnavailableView("No Songs", systemImage: "music.note") } }
+        .alert("New Playlist", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Cancel", role: .cancel) { naming = nil }
+            Button("Create") {
+                if let track = naming {
+                    let name = library.freeName(newName)
+                    library.change(PlaylistChange(op: .create, playlist: name))
+                    library.change(PlaylistChange(op: .add, playlist: name, track: track.id))
+                }
+                naming = nil
+            }
+        } message: {
+            Text("The song goes in it. Your computer gets the playlist at the next sync.")
+        }
+    }
+
+    /// Add to Playlist: the playlists it isn't in yet, and a new one
+    @ViewBuilder
+    private func addToPlaylistMenu(_ track: Track) -> some View {
+        Menu {
+            Button { newName = ""; naming = track } label: { Label("New Playlist…", systemImage: "plus") }
+            let others = library.playlists.filter { !$0.tracks.contains(track.id) }
+            if !others.isEmpty {
+                Divider()
+                ForEach(others) { p in
+                    Button(p.name) { library.change(PlaylistChange(op: .add, playlist: p.name, track: track.id)) }
+                }
+            }
+        } label: {
+            Label("Add to Playlist", systemImage: "text.badge.plus")
+        }
     }
 
     private func row(_ track: Track) -> some View {

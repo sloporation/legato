@@ -19,9 +19,13 @@ public:
 
 public slots:
     void poll();
+    // a sync is in two steps: the phone's playlist changes are taken (the window's thread makes them, as the library is there), then
+    // the music goes on
+    void collect(const QString &id);
     void sync(const QString &id, const SyncJob &job);
 
 signals:
+    void collected(const QString &id, const QVariantList &changes, const QString &error);
     void seen(const QVariantMap &device);
     void gone(const QString &id);
     void progress(const QString &id, qint64 done, qint64 total, const QString &what);
@@ -70,4 +74,5 @@ private:
     QVariantList m_devices;
     QThread m_thread;
     DeviceWorker *m_worker;
+    QHash<QString, QVariantMap> m_applied;     // a sync's playlist changes from the phone, for what it says when it's done
 };

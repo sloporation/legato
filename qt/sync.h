@@ -17,6 +17,7 @@ struct SyncJob {
     QStringList playable;     // the file types the phone can play (suffixes)
     QStringList convertible;  // the ones it can't that are converted to AAC (.m4a) on the way, when there is an ffmpeg
     QString ffmpeg;           // ffmpeg's path (findFfmpeg), or "" to leave those off too
+    bool clearChanges = false;  // the phone's playlist changes were taken (collectChanges): delete them once the new manifest is there
 };
 
 struct SyncResult {
@@ -38,6 +39,11 @@ SyncResult runSync(DeviceStorage &device, const SyncJob &job, const SyncProgress
 
 // what was chosen for the phone last time (the manifest's "chosen"), or an empty map
 QVariantMap readChosen(DeviceStorage &device);
+
+// The playlist changes made on the phone (docs/sync.md, "Phone → desktop"): changes.json becomes changes.applying.json (added to one left
+// from a sync that didn't finish), so changes made from now on aren't lost, and its changes come back in order. False if the phone
+// couldn't be read or written; no changes is an empty list.
+bool collectChanges(DeviceStorage &device, QVariantList *changes);
 
 // a track's id on the phone: stable across syncs, from the path of its file here
 QString syncId(const QString &path);

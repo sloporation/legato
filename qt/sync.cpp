@@ -110,6 +110,38 @@ QString syncId(const QString &path)
     return hash16(QDir::cleanPath(path).normalized(QString::NormalizationForm_C).toUtf8());
 }
 
+bool collectChanges(DeviceStorage &device, QVariantList *changes)
+{
+    changes->clear();
+    QByteArray fresh, applying;
+    const bool hasFresh = device.read("changes.json", &fresh);
+    const bool hasApplying = device.read("changes.applying.json", &applying);
+    const QJsonObject left = QJsonDocument::fromJson(applying).object();
+    const QJsonArray earlier = left["changes"].toArray();
+    const QJsonArray later = QJsonDocument::fromJson(fresh).object()["changes"].toArray();
+    if (hasFresh) {
+        if (!hasApplying) {
+            if (!device.rename("changes.json", "changes.applying.json"))
+                return false;
+        } else {
+            QJsonArray all = earlier;
+            for (const QJsonValue &c : later)
+                all.append(c);
+            QJsonObject merged = left;
+            merged["version"] = 1;
+            merged["changes"] = all;
+            if (!device.write("changes.applying.json", QJsonDocument(merged).toJson()) || !device.remove("changes.json"))
+                return false;
+        }
+    }
+    // (those a sync that didn't finish made already are left out: making them again needn't come to the same)
+    for (qsizetype i = left["applied"].toInteger(); i < earlier.size(); i++)
+        changes->append(earlier[i].toObject().toVariantMap());
+    for (const QJsonValue &c : later)
+        changes->append(c.toObject().toVariantMap());
+    return true;
+}
+
 QVariantMap readChosen(DeviceStorage &device)
 {
     QByteArray data;
@@ -125,6 +157,17 @@ SyncResult runSync(DeviceStorage &device, const SyncJob &job, const SyncProgress
         result.message = what + (device.error().isEmpty() ? QString() : ": " + device.error());
         return result;
     };
+
+    // the phone's playlist changes have been made: say so on the phone, so a sync after this one that didn't finish doesn't make them
+    // again
+    if (job.clearChanges) {
+        QByteArray applying;
+        if (device.read("changes.applying.json", &applying)) {
+            QJsonObject log = QJsonDocument::fromJson(applying).object();
+            log["applied"] = log["changes"].toArray().size();
+            device.write("changes.applying.json", QJsonDocument(log).toJson());
+        }
+    }
 
     // what is on the phone now
     QStringList musicFiles, coverFiles;
@@ -307,6 +350,9 @@ SyncResult runSync(DeviceStorage &device, const SyncJob &job, const SyncProgress
     if (!device.write("manifest.json.part", manifestJson(job.source, tracks, job.playlists, idOfPath, present, job.chosen))
         || !device.rename("manifest.json.part", "manifest.json"))
         return failed(QObject::tr("Couldn't write the phone's list of music"));
+    // the phone's playlist changes are in the manifest now
+    if (job.clearChanges)
+        device.remove("changes.applying.json");
 
     result.ok = !stopped && result.message.isEmpty();
     if (stopped)

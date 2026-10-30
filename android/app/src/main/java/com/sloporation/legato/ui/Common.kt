@@ -17,6 +17,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.rememberCoroutineScope
+import com.sloporation.legato.PlaylistChange
+import kotlinx.coroutines.launch
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -82,6 +86,13 @@ object Glyph {
     const val watch = ""
     const val equaliser = ""
     const val folder = "﫷"
+    const val plus = ""
+    const val remove = ""
+    const val up = ""
+    const val down = ""
+    const val rename = ""
+    const val delete = ""
+    const val addToPlaylist = ""
 }
 
 @Composable
@@ -125,8 +136,9 @@ fun PlayShuffleButtons(player: PlayerConnection, tracks: List<Track>, modifier: 
 }
 
 /**
- * One track in a list. Tapping plays [tracks] from it; long-pressing offers to play it, or to go to its album, its artist or a
- * playlist it is in (leaving out the one the list already is, [here]).
+ * One track in a list. Tapping plays [tracks] from it; long-pressing offers to play it, to add it to a playlist, or to go to its album,
+ * its artist or a playlist it is in (leaving out the one the list already is, [here]). In a playlist's own list, it can also be moved up
+ * or down, or taken out.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -143,6 +155,9 @@ fun TrackRow(
     val playing = player.current?.id == track.id
     val haptics = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
+    var adding by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val inPlaylist = (here as? Route.Playlist)?.name     // a playlist's own list: its tracks can be removed and moved
     val accent = MaterialTheme.colorScheme.primary
     Box {
         Row(
@@ -176,6 +191,22 @@ fun TrackRow(
         }
         DropdownMenu(menu, { menu = false }) {
             DropdownMenuItem({ Text("Play") }, { menu = false; player.play(tracks, index) }, leadingIcon = { Icon(Glyph.play, size = 18.dp) })
+            DropdownMenuItem({ Text("Add to playlist…") }, { menu = false; adding = true }, leadingIcon = { Icon(Glyph.addToPlaylist, size = 18.dp) })
+            if (inPlaylist != null) {
+                fun change(c: PlaylistChange) { menu = false; scope.launch { library.change(c) } }
+                if (index > 0) {
+                    // up one: after the track two above, or to the top
+                    DropdownMenuItem({ Text("Move up") }, { change(PlaylistChange(PlaylistChange.Op.move, inPlaylist, track = track.id, after = tracks.getOrNull(index - 2)?.id)) },
+                        leadingIcon = { Icon(Glyph.up, size = 18.dp) })
+                }
+                if (index < tracks.lastIndex) {
+                    DropdownMenuItem({ Text("Move down") }, { change(PlaylistChange(PlaylistChange.Op.move, inPlaylist, track = track.id, after = tracks[index + 1].id)) },
+                        leadingIcon = { Icon(Glyph.down, size = 18.dp) })
+                }
+                DropdownMenuItem({ Text("Remove from playlist") }, { change(PlaylistChange(PlaylistChange.Op.remove, inPlaylist, track = track.id)) },
+                    leadingIcon = { Icon(Glyph.remove, size = 18.dp) })
+            }
+            HorizontalDivider()
             if (here != Route.Album(track.albumKey)) {
                 DropdownMenuItem({ Text("Go to Album") }, { menu = false; go(Route.Album(track.albumKey)) }, leadingIcon = { Icon(Glyph.disc, size = 18.dp) })
             }
@@ -188,6 +219,7 @@ fun TrackRow(
             }
         }
     }
+    if (adding) AddToPlaylistDialog(library, track) { adding = false }
 }
 
 @Composable

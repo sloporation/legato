@@ -93,6 +93,36 @@ void DeviceWorker::poll()
     }
 }
 
+void DeviceWorker::collect(const QString &id)
+{
+    QVariantList changes;
+    QString error;
+    auto take = [&](DeviceStorage &phone) {
+        if (!collectChanges(phone, &changes))
+            error = tr("Couldn't read the playlist changes on the phone: %1").arg(phone.error());
+    };
+#ifdef LEGATO_IPHONE
+    if (id.startsWith("iphone:")) {
+        IPhoneStorage phone;
+        if (phone.open(id.mid(7)) != IPhoneStorage::Ready)
+            error = phone.error();
+        else
+            take(phone);
+    }
+#endif
+#ifdef LEGATO_ANDROID
+    if (id.startsWith("android:")) {
+        AndroidStorage phone;
+        if (!phone.open(id.mid(8)))
+            error = phone.error();
+        else
+            take(phone);
+    }
+#endif
+    Q_UNUSED(take);
+    emit collected(id, changes, error);
+}
+
 void DeviceWorker::sync(const QString &id, const SyncJob &job)
 {
     stop = false;
@@ -165,6 +195,22 @@ Devices::Devices(Library *library, QObject *parent)
     connect(m_worker, &DeviceWorker::progress, this, [this](const QString &id, qint64 done, qint64 total, const QString &what) {
         update(id, { { "done", done }, { "total", total }, { "what", what } });
     });
+    // the phone's playlist changes are made here, and then the music goes on with the playlists as they now are
+    connect(m_worker, &DeviceWorker::collected, this, [this](const QString &id, const QVariantList &changes, const QString &error) {
+        const int i = indexOf(id);
+        if (i < 0)
+            return;
+        if (!error.isEmpty()) {
+            update(id, { { "syncing", false }, { "result", QVariantMap { { "ok", false }, { "message", error } } } });
+            emit synced(m_devices[i].toMap()["name"].toString(), error);
+            return;
+        }
+        m_applied[id] = m_library->applyPhoneChanges(changes);
+        const QVariantMap d = m_devices[i].toMap();
+        SyncJob j = job(d["kind"].toString(), d["chosen"].toMap());
+        j.clearChanges = !changes.isEmpty();
+        QMetaObject::invokeMethod(m_worker, [w = m_worker, id, j] { w->sync(id, j); }, Qt::QueuedConnection);
+    });
     connect(m_worker, &DeviceWorker::synced, this, [this](const QString &id, const QVariantMap &r) {
         QVariantMap changes { { "syncing", false }, { "result", r } };
         if (r["ok"].toBool())
@@ -187,6 +233,14 @@ Devices::Devices(Library *library, QObject *parent)
             if (unplayable > 0)
                 message += tr(". %1 left off: the phone can't play them, and there's no ffmpeg to convert them").arg(unplayable);
         }
+        // and what came back from the phone
+        const QVariantMap applied = m_applied.take(id);
+        const int made = applied["made"].toInt();
+        const QStringList skipped = applied["skipped"].toStringList();
+        if (made > 0)
+            message += made == 1 ? tr(". 1 playlist change from the phone") : tr(". %1 playlist changes from the phone").arg(made);
+        if (!skipped.isEmpty())
+            message += tr(" (left out: %1)").arg(skipped.join(", "));
         emit synced(name, message);
     });
 
@@ -323,9 +377,8 @@ void Devices::sync(const QString &id)
     const QVariantMap d = m_devices[i].toMap();
     if (d["syncing"].toBool() || d["status"] != "ready")
         return;
-    const SyncJob j = job(d["kind"].toString(), d["chosen"].toMap());
     update(id, { { "syncing", true }, { "done", 0 }, { "total", 0 }, { "what", tr("Starting") }, { "result", QVariant() } });
-    QMetaObject::invokeMethod(m_worker, [w = m_worker, id, j] { w->sync(id, j); }, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(m_worker, [w = m_worker, id] { w->collect(id); }, Qt::QueuedConnection);
 }
 
 void Devices::stopSync()

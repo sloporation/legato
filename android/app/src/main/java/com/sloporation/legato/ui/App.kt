@@ -6,7 +6,9 @@ import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,10 +22,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -33,6 +37,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
@@ -57,6 +62,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.sloporation.legato.LibraryStore
 import com.sloporation.legato.PlayerConnection
+import com.sloporation.legato.PlaylistChange
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -133,6 +139,7 @@ fun App(library: LibraryStore, player: PlayerConnection) {
             }
         },
     ) { padding ->
+        if (library.needsWriteAccess) WriteAccessDialog(library)
         Box(Modifier.padding(padding).fillMaxSize()) {
             when {
                 library.folder == null && route !is Route.Settings -> ChooseFolder(library)
@@ -232,23 +239,64 @@ private fun MusicPage(library: LibraryStore, player: PlayerConnection, go: (Rout
     }
 }
 
-/** The Playlists tab: the playlists synced from the desktop, each opening its tracks in its own order. */
+/**
+ * The Playlists tab: the playlists synced from the desktop, each opening its tracks in its own order. + makes a new one; long-pressing
+ * one renames or deletes it. The desktop gets the changes at the next sync.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistsPage(library: LibraryStore, go: (Route) -> Unit) {
-    if (library.playlists.isEmpty()) {
-        Empty(Glyph.playlist, "No Playlists", "Choose playlists to put on your phone in Legato on your computer.")
-        return
-    }
-    LazyColumn {
-        items(library.playlists, key = { it.name }) { p ->
-            val tracks = library.tracks(p)
-            ListItem(
-                headlineContent = { Text(p.name) },
-                supportingContent = { Text(if (tracks.size == 1) "1 song" else "${tracks.size} songs") },
-                leadingContent = { Cover(library, tracks.firstOrNull()?.cover, 52.dp) },
-                modifier = Modifier.clickable { go(Route.Playlist(p.name)) },
-            )
+    val scope = rememberCoroutineScope()
+    var creating by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf<String?>(null) }
+    var deleting by remember { mutableStateOf<String?>(null) }
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    Box(Modifier.fillMaxSize()) {
+        if (library.playlists.isEmpty()) {
+            Empty(Glyph.playlist, "No Playlists", "Make one with +, or choose playlists to put on your phone in Legato on your computer.")
         }
+        LazyColumn {
+            items(library.playlists, key = { it.name }) { p ->
+                val tracks = library.tracks(p)
+                Box {
+                    ListItem(
+                        headlineContent = { Text(p.name) },
+                        supportingContent = { Text(if (tracks.size == 1) "1 song" else "${tracks.size} songs") },
+                        leadingContent = { Cover(library, tracks.firstOrNull()?.cover, 52.dp) },
+                        modifier = Modifier.combinedClickable(onClick = { go(Route.Playlist(p.name)) }, onLongClick = { menuFor = p.name }),
+                    )
+                    DropdownMenu(menuFor == p.name, { menuFor = null }) {
+                        DropdownMenuItem({ Text("Rename…") }, { menuFor = null; renaming = p.name }, leadingIcon = { Icon(Glyph.rename, size = 18.dp) })
+                        DropdownMenuItem({ Text("Delete") }, { menuFor = null; deleting = p.name }, leadingIcon = { Icon(Glyph.delete, size = 18.dp) })
+                    }
+                }
+            }
+        }
+        FloatingActionButton({ creating = true }, Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
+            Icon(Glyph.plus, size = 24.dp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
+    }
+    if (creating) NameDialog("New playlist", "Create", "") { name ->
+        creating = false
+        if (name != null) scope.launch { library.change(PlaylistChange(PlaylistChange.Op.create, library.freeName(name))) }
+    }
+    renaming?.let { old ->
+        NameDialog("Rename playlist", "Rename", old) { name ->
+            renaming = null
+            if (name != null && name.trim().isNotEmpty() && name.trim() != old)
+                scope.launch { library.change(PlaylistChange(PlaylistChange.Op.rename, old, to = library.freeName(name))) }
+        }
+    }
+    deleting?.let { name ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete “$name”?") },
+            text = { Text("The songs stay. Your computer moves the playlist to the Trash at the next sync.") },
+            confirmButton = {
+                TextButton({ deleting = null; scope.launch { library.change(PlaylistChange(PlaylistChange.Op.delete, name)) } }) { Text("Delete") }
+            },
+            dismissButton = { TextButton({ deleting = null }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -263,13 +311,10 @@ private fun ChooseFolder(library: LibraryStore) {
         Glyph.folder, "Where's your music?",
         "Legato on your computer puts your music in Music › Legato on this phone, over USB. Choose that folder so Legato can play it.",
     ) {
-        Button({ pick.launch(legatoFolderHint) }, Modifier.padding(top = 8.dp)) { Text("Choose the Legato Folder") }
+        Button({ pick.launch(legatoFolder) }, Modifier.padding(top = 8.dp)) { Text("Choose the Legato Folder") }
     }
 }
 
-/** Opens the system picker at Music/Legato (on the phone's own storage). */
-private val legatoFolderHint: Uri =
-    DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Music/Legato")
 
 @Composable
 private fun SettingsPage(library: LibraryStore) {
@@ -288,7 +333,7 @@ private fun SettingsPage(library: LibraryStore) {
             ListItem(
                 headlineContent = { Text("Music folder") },
                 supportingContent = { Text(library.folder?.lastPathSegment?.substringAfter(':') ?: "Not chosen") },
-                trailingContent = { OutlinedButton({ pick.launch(legatoFolderHint) }) { Text("Change") } },
+                trailingContent = { OutlinedButton({ pick.launch(legatoFolder) }) { Text("Change") } },
             )
         }
     }
