@@ -46,6 +46,8 @@ jobs:
       - name: Package
         run: |
           "$(brew --prefix qt)/bin/macdeployqt" build/Legato.app -qmldir=qt/qml
+          # the licenses of Legato and of every library macdeployqt bundled, in Contents/Resources/Licenses (before signing)
+          qt/packaging/collect-licenses.sh build/Legato.app
           # macdeployqt rewrites the libraries it copies in without signing them again, and macOS kills such an app on Apple
           # silicon: sign it again (ad hoc, so it still asks for right-click › Open the first time; a Developer ID would not)
           codesign --force --deep --sign - build/Legato.app
