@@ -36,7 +36,7 @@ struct WatchLibraryView: View {
                 }
             }
             if library.tracks.isEmpty {
-                Text("Choose music for your watch in Legato on your iPhone, under Apple Watch.")
+                Text("Choose music for your watch in Legato on your iPhone: the cog menu, then Watch Sync.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
