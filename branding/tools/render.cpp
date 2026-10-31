@@ -2,11 +2,15 @@
 //
 //   render icon.svg out.png <size> square     opaque, full bleed: iOS and watchOS (the system rounds the corners itself)
 //   render icon.svg out.png <size> macos      the macOS shape: a rounded square inset in a transparent canvas, as macOS icons are
+//   render icon.svg out.png <size> foreground the glyph alone (no #background), scaled into the middle 72%: Android's adaptive icon
+//                                             foreground, which launchers mask to a circle, squircle and so on
 //   render icon.svg out.png sheet             a preview of the sizes on light and dark backgrounds
 #include <QGuiApplication>
 #include <QImage>
 #include <QPainter>
+#include <QFile>
 #include <QPainterPath>
+#include <QRegularExpression>
 #include <QSvgRenderer>
 
 static QImage render(QSvgRenderer &svg, int size, const QString &shape)
@@ -22,6 +26,9 @@ static QImage render(QSvgRenderer &svg, int size, const QString &shape)
         QPainterPath clip;
         clip.addRoundedRect(area, size * 185 / 1024.0, size * 185 / 1024.0);
         p.setClipPath(clip);
+    } else if (shape == "foreground") {
+        const double inset = size * 0.14;
+        area = QRectF(inset, inset, size - 2 * inset, size - 2 * inset);
     } else if (shape == "rounded") {
         QPainterPath clip;
         clip.addRoundedRect(area, size * 0.2237, size * 0.2237);
@@ -36,7 +43,13 @@ int main(int argc, char **argv)
     QGuiApplication app(argc, argv);
     if (argc < 4)
         return 2;
-    QSvgRenderer svg(QString::fromLocal8Bit(argv[1]));
+    QFile file(QString::fromLocal8Bit(argv[1]));
+    if (!file.open(QIODevice::ReadOnly))
+        return 2;
+    QString text = QString::fromUtf8(file.readAll());
+    if (argc > 4 && QString(argv[4]) == "foreground")
+        text.remove(QRegularExpression(R"(<rect id="background"[^>]*/>)"));
+    QSvgRenderer svg(text.toUtf8());
     if (!svg.isValid())
         return 2;
     if (QString(argv[3]) == "sheet") {

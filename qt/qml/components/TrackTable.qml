@@ -5,7 +5,8 @@ import App
 // A table of tracks, the way Apple Music shows them: a header to sort by (click again to reverse) and to resize the columns by their
 // right edge, striped rows that carry on past the last track, and rows picked by click or the arrow keys (Cmd- and Shift-click for more
 // than one). The play button at the left of a row, a double-click or Return plays from that track on: the Player gets the rows in the
-// order they are shown. Right-click (or Cmd+I) to edit the selected tracks' tags, one or many at once.
+// order they are shown. Right-click (or Cmd+I) to edit the selected tracks' tags, one or many at once. Drag them onto a playlist in the
+// sidebar to add them to it.
 // When the columns are wider than the view, it scrolls sideways (trackpad, Shift+wheel, or the scroll bar), header and rows together.
 // TrackTable { tracks: Library.tracks }
 FocusScope {
@@ -354,6 +355,34 @@ FocusScope {
                 }
 
                 HoverHandler { id: rowHover }
+
+                // dragged onto a playlist in the sidebar: the selection when the row is in it, else this row alone
+                Drag.dragType: Drag.Automatic
+                Drag.supportedActions: Qt.CopyAction
+                Drag.hotSpot: Qt.point(-12, -12)
+                DragHandler {
+                    id: rowDrag
+                    target: null
+                    onActiveChanged: {
+                        if (!active)
+                            return
+                        if (!row.selected)
+                            table.select(row.index, 0)
+                        const paths = table.selectedTracks.map(t => t.path)
+                        dragBadge.text = paths.length === 1 ? (row.modelData.title || row.modelData.path.split("/").pop())
+                                                            : qsTr("%1 songs").arg(paths.length)
+                        row.Drag.mimeData = {
+                            "application/x-legato-tracks": JSON.stringify(paths),
+                            "text/uri-list": paths.map(p => encodeURI("file://" + p)).join("\r\n")
+                        }
+                        dragBadge.grabToImage(result => {
+                            row.Drag.imageSource = result.url
+                            row.Drag.active = true
+                        }, Qt.size(dragBadge.width, dragBadge.height))
+                    }
+                }
+                Drag.onDragFinished: Drag.active = false
+
                 // the menu acts on the selection when the row is in it, else on this row alone
                 function openMenu() {
                     if (row.selected) list.currentIndex = row.index
@@ -413,6 +442,18 @@ FocusScope {
             }
         }
         TrackInfoDialog { id: info; objectName: "trackInfo" }
+
+        // what a drag shows under the pointer: the song's name, or how many (drawn off to one side, and grabbed as an image)
+        Label {
+            id: dragBadge
+            x: -width - 100
+            padding: 6
+            leftPadding: 10
+            rightPadding: 10
+            font.pixelSize: 13
+            color: Theme.accentText
+            background: Rectangle { radius: height / 2; color: Theme.accent }
+        }
 
         Label {
             anchors.centerIn: parent

@@ -23,20 +23,22 @@ ApplicationWindow {
     palette.buttonText: Theme.text
     palette.highlight: Theme.accent
 
-    // "artists" (showing artistName), "albums", "songs", "album" (the one at albumKey, opened from albumFrom) or "playlist" (the .m3u at
-    // playlistPath)
+    // "artists" (showing artistName), "albums", "songs", "album" (the one at albumKey, opened from albumFrom), "playlist" (the .m3u at
+    // playlistPath) or "device" (the phone deviceId)
     property string page: "songs"
     property string playlistPath: ""
     property string albumKey: ""
     property string albumFrom: "albums"
     property string artistName: ""
+    property string deviceId: ""
     // what the find field in the header holds, on the pages of tracks (songs, a playlist); a new page starts without it
     property string filter: ""
-    readonly property bool canFilter: !noFolders && (page === "songs" || page === "playlist")
+    readonly property bool canFilter: !noFolders && (page === "songs" || page === "playlist" || page === "device")
     function openPage(name) { drawer.close(); filter = ""; page = name }
     function openAlbum(key, from) { albumKey = key; albumFrom = from; page = "album" }
     function back() { if (page === "album") page = albumFrom }
     function openPlaylist(path) { drawer.close(); filter = ""; playlistPath = path; page = "playlist" }
+    function openDevice(id) { drawer.close(); filter = ""; deviceId = id; page = "device" }
     function newPlaylist() {
         const index = Library.createPlaylist(qsTr("New Playlist"))
         if (index >= 0) openPlaylist(Library.playlists[index].path)
@@ -83,7 +85,10 @@ ApplicationWindow {
 
     readonly property var playlist: page === "playlist" ? Library.playlists.find(p => p.path === playlistPath) ?? null : null
     readonly property var album: page === "album" ? Library.albums.find(a => a.key === albumKey) ?? null : null
-    readonly property string pageTitle: ({ artists: qsTr("Artists"), albums: qsTr("Albums"), songs: qsTr("Songs") })[page] ?? playlist?.name ?? album?.title ?? ""
+    readonly property var device: page === "device" ? Devices.devices.find(d => d.id === deviceId) ?? null : null
+    // unplugged while its page was showing
+    onDeviceChanged: if (page === "device" && !device) openPage("songs")
+    readonly property string pageTitle: ({ artists: qsTr("Artists"), albums: qsTr("Albums"), songs: qsTr("Songs") })[page] ?? playlist?.name ?? album?.title ?? device?.name ?? ""
     function count(n, one, many) { return n + " " + (n === 1 ? one : many) }
     // (filtered: how many of them are showing)
     readonly property string shownOf: canFilter && filter.trim() !== "" && pageLoader.item?.matching ? pageLoader.item.matching.length + " " + qsTr("of") + " " : ""
@@ -91,7 +96,8 @@ ApplicationWindow {
                                         : page === "albums" ? count(Library.albums.length, qsTr("album"), qsTr("albums"))
                                         : page === "artists" ? count(Library.artists.length, qsTr("artist"), qsTr("artists"))
                                         : playlist ? count(playlist.tracks.length, qsTr("song"), qsTr("songs"))
-                                        : album ? album.artist : "")
+                                        : album ? album.artist
+                                        : device ? (device.kind === "iphone" ? qsTr("iPhone") : qsTr("Android")) : "")
                                        + (Library.scanning ? " · " + qsTr("scanning…") : "")
     readonly property bool noFolders: Settings.musicDirs.length === 0
 
@@ -149,7 +155,7 @@ ApplicationWindow {
                         id: findField
                         visible: root.canFilter
                         Layout.preferredWidth: Math.min(240, root.width * 0.3)
-                        placeholderText: root.page === "playlist" ? qsTr("Find in Playlist") : qsTr("Find in Songs")
+                        placeholderText: root.page === "playlist" ? qsTr("Find in Playlist") : root.page === "device" ? qsTr("Find") : qsTr("Find in Songs")
                         text: root.filter
                         onTextEdited: root.filter = text
                     }
@@ -162,7 +168,8 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 sourceComponent: root.noFolders ? noFoldersPage
-                               : ({ artists: artistsPage, albums: albumsPage, songs: songsPage, album: albumPage, playlist: playlistPage })[root.page]
+                               : ({ artists: artistsPage, albums: albumsPage, songs: songsPage, album: albumPage, playlist: playlistPage,
+                                    device: devicePage })[root.page]
             }
 
             PlayerBar {
@@ -183,6 +190,7 @@ ApplicationWindow {
     Component { id: albumsPage; AlbumsView { onActivated: album => root.openAlbum(album.key, "albums") } }
     Component { id: albumPage; AlbumView { albumKey: root.albumKey } }
     Component { id: songsPage; SongsView { filter: root.filter; onFilterRequested: f => root.filter = f } }
+    Component { id: devicePage; DeviceView { device: root.device; filter: root.filter } }
     Component { id: playlistPage; PlaylistView { playlistPath: root.playlistPath; filter: root.filter; onFilterRequested: f => root.filter = f } }
     // Cmd+F (Ctrl+F) to find, as everywhere
     Shortcut { sequences: [StandardKey.Find]; enabled: root.canFilter; onActivated: { findField.forceActiveFocus(); findField.selectAll() } }
@@ -219,8 +227,10 @@ ApplicationWindow {
         Sidebar {
             page: root.page === "album" ? root.albumFrom : root.page     // (an album belongs to the page it was opened from)
             playlistPath: root.playlistPath
+            deviceId: root.deviceId
             onOpenPage: name => root.openPage(name)
             onOpenPlaylist: path => root.openPlaylist(path)
+            onOpenDevice: id => root.openDevice(id)
             onNewPlaylist: root.newPlaylist()
             onOpenSettings: root.openSettings()
         }
@@ -247,6 +257,7 @@ ApplicationWindow {
     // a short message at the bottom, when something could not be done
     Connections { target: Settings; function onFailed(message) { toast.show(message) } }
     Connections { target: Library; function onFailed(message) { toast.show(message) } }
+    Connections { target: Devices; function onSynced(name, message) { toast.show(name + ": " + message) } }
     // a track's tags were edited: the player's copy of it (in the now-playing bar) takes the change too
     Connections { target: Library; function onTrackEdited(track) { Player.updateTrack(track) } }
     Rectangle {

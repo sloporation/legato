@@ -50,6 +50,12 @@ public:
     Q_INVOKABLE void rescan();
     // an empty playlist file in the first music folder; returns its index in playlists, or -1
     Q_INVOKABLE int createPlaylist(const QString &name);
+    // the tracks (files) onto the end of the playlist (its file), leaving out any already in it; how many were added, or -1 if the file
+    // couldn't be written (failed says why)
+    Q_INVOKABLE int addToPlaylist(const QString &playlistPath, const QStringList &trackPaths);
+    // Playlist changes made on a phone (docs/sync.md, "Phone → desktop": { op, playlist, to, track, after }, tracks by their sync id),
+    // made to the playlist files in order, each as far as it still can be. Returns { made: n, skipped: [why, for each left out] }.
+    QVariantMap applyPhoneChanges(const QVariantList &changes);
 
     // A file's tags as text, for the edit window: title, artist, album, albumArtist, genre, date, trackNumber, trackTotal, discNumber,
     // discTotal; and about the file: format, bitrate (kbps), sampleRate (Hz), channels, duration (s).
@@ -98,7 +104,15 @@ private:
     std::atomic<int> m_generation { 0 };   // bumped to tell a running scan its results are no longer wanted
 };
 
-// image://cover/<percent-encoded path of a track>: the picture embedded in the file, or a cover.jpg/folder.jpg beside it.
+// a track's cover: the picture embedded in the file (the front cover, if one is marked as such), or a cover.jpg/folder.jpg beside it;
+// a null image if there is none
+QImage coverImage(const QString &trackPath);
+
+// albumArtist, else artist (a track map's); what the albums and artists are grouped by
+QString albumArtistOf(const QVariantMap &track);
+QString albumKey(const QVariantMap &track);
+
+// image://cover/<percent-encoded path of a track>: coverImage.
 class CoverProvider : public QQuickImageProvider {
 public:
     CoverProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}

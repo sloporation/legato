@@ -8,13 +8,16 @@ Rectangle {
     required property string glyph
     required property string label
     property bool selected: false
+    property bool dropTarget: false     // something dragged over it would land here
     signal clicked()
 
     height: Theme.sidebarRowHeight
     radius: Theme.radius
     color: selected ? Theme.accent
          : tap.pressed ? Theme.tint(Theme.text, Theme.selected)
-         : hover.hovered ? Theme.tint(Theme.text, Theme.hover) : "transparent"
+         : hover.hovered || dropTarget ? Theme.tint(Theme.text, Theme.hover) : "transparent"
+    border.width: dropTarget ? 2 : 0
+    border.color: Theme.accent
 
     Accessible.role: Accessible.Button
     Accessible.name: label

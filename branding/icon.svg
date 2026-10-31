@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <!-- Legato's icon: two notes as eyes, the legato slur bridging them as a smile. The master: full-bleed square (the system rounds
        the corners). Export with branding/export (see branding/README.md). -->
-  <rect width="1024" height="1024" fill="#7E302A"/>
+  <rect id="background" width="1024" height="1024" fill="#7E302A"/>
   <g fill="#FFFFFF">
     <!-- left note: head, and its stem rising from the head's right side -->
     <ellipse cx="372" cy="560" rx="112" ry="86" transform="rotate(-24 372 560)"/>

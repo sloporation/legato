@@ -1,5 +1,6 @@
 #include "library.h"
 #include "settings.h"
+#include "sync.h"
 
 #include <climits>
 
@@ -367,8 +368,6 @@ void Library::addTracks(const QVariantList &batch)
     emit tracksChanged();
 }
 
-namespace {
-
 // which album a track is on: its album artist (else its artist) and album title, ignoring case
 QString albumArtistOf(const QVariantMap &t)
 {
@@ -378,8 +377,6 @@ QString albumKey(const QVariantMap &t)
 {
     return albumArtistOf(t).toCaseFolded() + QChar(0x1f) + t["album"].toString().toCaseFolded();
 }
-
-} // namespace
 
 QVariantList Library::albumTracks(const QString &key) const
 {
@@ -668,6 +665,246 @@ QPair<QString, QString> numberAndTotal(const TagLib::PropertyMap &props, const c
 
 } // namespace
 
+int Library::addToPlaylist(const QString &playlistPath, const QStringList &trackPaths)
+{
+    int index = -1;
+    for (int i = 0; i < m_playlists.size(); i++)
+        if (m_playlists[i].toMap()["path"] == playlistPath)
+            index = i;
+    if (index < 0)
+        return -1;
+    QVariantMap playlist = m_playlists[index].toMap();
+
+    QHash<QString, int> ids;
+    for (const QVariant &v : std::as_const(m_tracks)) {
+        const QVariantMap t = v.toMap();
+        ids.insert(pathKey(t["path"].toString()), t["id"].toInt());
+    }
+    QVariantList tracks = playlist["tracks"].toList();
+    QSet<int> already;
+    for (const QVariant &id : std::as_const(tracks))
+        already.insert(id.toInt());
+
+    // each as a path from the playlist's folder (as most players write them), else in full
+    const QDir base = QFileInfo(playlistPath).absoluteDir();
+    QByteArray lines;
+    int added = 0;
+    for (const QString &path : trackPaths) {
+        const auto id = ids.constFind(pathKey(path));
+        if (id == ids.constEnd() || already.contains(*id))
+            continue;
+        already.insert(*id);
+        const QString relative = base.relativeFilePath(path);
+        lines += (relative.startsWith("../") ? QDir::cleanPath(path) : relative).toUtf8() + '\n';
+        tracks << *id;
+        added++;
+    }
+    if (added == 0) {
+        emit failed(trackPaths.size() == 1 ? tr("It's already in “%1”.").arg(playlist["name"].toString())
+                                           : tr("They're already in “%1”.").arg(playlist["name"].toString()));
+        return 0;
+    }
+
+    QFile f(playlistPath);
+    if (!f.open(QIODevice::ReadWrite)) {
+        emit failed(tr("Couldn't change %1: %2").arg(QFileInfo(playlistPath).fileName(), f.errorString()));
+        return -1;
+    }
+    const QByteArray before = f.readAll();
+    if (!before.isEmpty() && !before.endsWith('\n'))
+        lines.prepend('\n');
+    if (f.write(lines) != lines.size()) {
+        emit failed(tr("Couldn't change %1: %2").arg(QFileInfo(playlistPath).fileName(), f.errorString()));
+        return -1;
+    }
+    f.close();
+
+    playlist["tracks"] = tracks;
+    m_playlists[index] = playlist;
+    emit playlistsChanged();
+    return added;
+}
+
+namespace {
+
+// a playlist file as entries: each line naming a file, with the comment lines (#EXTINF) just before it; what comes before the first
+// is kept as it is. track is the library's id, or -1 for an entry that isn't in the library.
+struct PlaylistFile {
+    QStringList preamble;
+    struct Entry { QStringList lines; int track; };
+    QList<Entry> entries;
+
+    static PlaylistFile read(const QString &path, const QHash<QString, int> &ids)
+    {
+        PlaylistFile p;
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+            return p;
+        const QDir base = QFileInfo(path).absoluteDir();
+        QStringList pending;
+        bool started = false;
+        for (const QByteArray &raw : f.readAll().split('\n')) {
+            QString line = QString::fromUtf8(raw);
+            if (line.endsWith('\r'))
+                line.chop(1);
+            const QString trimmed = line.trimmed();
+            if (trimmed.isEmpty() || trimmed.startsWith('#') || trimmed.startsWith(QChar(0xFEFF) + QString("#"))) {
+                if (!trimmed.isEmpty())
+                    (started || trimmed.startsWith("#EXTINF") ? pending : p.preamble) << line;
+                continue;
+            }
+            started = true;
+            QString entry = trimmed.startsWith("file:", Qt::CaseInsensitive) ? QUrl(trimmed).toLocalFile() : trimmed;
+            auto it = ids.constFind(pathKey(base.absoluteFilePath(entry)));
+            if (it == ids.constEnd() && entry.contains('\\'))
+                it = ids.constFind(pathKey(base.absoluteFilePath(entry.replace('\\', '/'))));
+            pending << line;
+            p.entries.append({ pending, it == ids.constEnd() ? -1 : *it });
+            pending.clear();
+        }
+        p.preamble << pending;     // (comments after the last entry)
+        return p;
+    }
+
+    int indexOf(int track) const
+    {
+        for (int i = 0; i < entries.size(); i++)
+            if (entries[i].track == track)
+                return i;
+        return -1;
+    }
+
+    bool write(const QString &path) const
+    {
+        QSaveFile f(path);
+        if (!f.open(QIODevice::WriteOnly))
+            return false;
+        QByteArray out;
+        for (const QString &line : preamble)
+            out += line.toUtf8() + '\n';
+        for (const Entry &e : entries)
+            for (const QString &line : e.lines)
+                out += line.toUtf8() + '\n';
+        return f.write(out) == out.size() && f.commit();
+    }
+};
+
+} // namespace
+
+QVariantMap Library::applyPhoneChanges(const QVariantList &changes)
+{
+    QStringList skipped;
+    int made = 0;
+    if (changes.isEmpty())
+        return { { "made", 0 }, { "skipped", skipped } };
+
+    // the phone's ids → the library's tracks
+    QHash<QString, int> byPath, bySyncId;
+    QHash<int, QString> pathOf;
+    for (const QVariant &v : std::as_const(m_tracks)) {
+        const QVariantMap t = v.toMap();
+        const QString path = t["path"].toString();
+        byPath.insert(pathKey(path), t["id"].toInt());
+        bySyncId.insert(syncId(path), t["id"].toInt());
+        pathOf.insert(t["id"].toInt(), path);
+    }
+    auto playlistPath = [&](const QString &name) {
+        for (const QVariant &v : std::as_const(m_playlists))
+            if (v.toMap()["name"].toString() == name)
+                return v.toMap()["path"].toString();
+        return QString();
+    };
+
+    QVariantList playlists = m_playlists;
+    auto refresh = [&](const QString &path) {     // (re-read, as the scan would)
+        for (QVariant &v : playlists)
+            if (v.toMap()["path"] == path)
+                v = readPlaylist(path, byPath);
+    };
+
+    for (const QVariant &v : changes) {
+        const QVariantMap c = v.toMap();
+        const QString op = c["op"].toString(), name = c["playlist"].toString();
+        const QString path = playlistPath(name);
+        if (op == "create") {
+            if (!path.isEmpty())
+                continue;
+            const QStringList dirs = m_settings->musicDirs();
+            const QString file = dirs.isEmpty() ? QString() : QDir(dirs.first()).filePath(name + ".m3u8");
+            QFile f(file);
+            if (file.isEmpty() || name.contains('/') || !f.open(QIODevice::WriteOnly | QIODevice::NewOnly) || f.write("#EXTM3U\n") < 0) {
+                skipped << tr("“%1” couldn't be made").arg(name);
+                continue;
+            }
+            f.close();
+            playlists << readPlaylist(file, byPath);
+            m_playlists = playlists;
+            made++;
+            continue;
+        }
+        if (path.isEmpty()) {
+            if (op != "delete")
+                skipped << tr("“%1” isn't on this computer any more").arg(name);
+            continue;
+        }
+        if (op == "rename") {
+            const QString to = c["to"].toString().trimmed();
+            const QString target = QFileInfo(path).dir().filePath(to + "." + QFileInfo(path).suffix());
+            if (to.isEmpty() || to.contains('/') || !playlistPath(to).isEmpty() || QFileInfo::exists(target) || !QFile::rename(path, target)) {
+                skipped << tr("“%1” couldn't be renamed “%2”").arg(name, to);
+                continue;
+            }
+            for (QVariant &p : playlists)
+                if (p.toMap()["path"] == path)
+                    p = readPlaylist(target, byPath);
+        } else if (op == "delete") {
+            if (!QFile::moveToTrash(path)) {
+                skipped << tr("“%1” couldn't be moved to the Trash").arg(name);
+                continue;
+            }
+            playlists.erase(std::remove_if(playlists.begin(), playlists.end(),
+                                           [&](const QVariant &p) { return p.toMap()["path"] == path; }), playlists.end());
+        } else {
+            const int track = bySyncId.value(c["track"].toString(), -1);
+            if (track < 0) {
+                skipped << tr("a song in “%1” isn't on this computer any more").arg(name);
+                continue;
+            }
+            PlaylistFile file = PlaylistFile::read(path, byPath);
+            const int at = file.indexOf(track);
+            if (op == "add") {
+                if (at >= 0)
+                    continue;
+                const QDir base = QFileInfo(path).absoluteDir();
+                const QString relative = base.relativeFilePath(pathOf.value(track));
+                file.entries.append({ { relative.startsWith("../") ? QDir::cleanPath(pathOf.value(track)) : relative }, track });
+            } else if (op == "remove") {
+                if (at < 0)
+                    continue;
+                file.entries.removeAt(at);
+            } else if (op == "move") {
+                if (at < 0)
+                    continue;
+                const auto entry = file.entries.takeAt(at);
+                const QString after = c["after"].toString();
+                const int afterAt = after.isEmpty() ? -1 : file.indexOf(bySyncId.value(after, -2));
+                file.entries.insert(after.isEmpty() ? 0 : afterAt >= 0 ? afterAt + 1 : at, entry);
+            } else {
+                continue;     // (a kind of change this version doesn't know)
+            }
+            if (!file.write(path)) {
+                skipped << tr("“%1” couldn't be changed").arg(name);
+                continue;
+            }
+            refresh(path);
+        }
+        m_playlists = playlists;     // (later changes look playlists up by name)
+        made++;
+    }
+    setPlaylists(playlists);
+    return { { "made", made }, { "skipped", skipped } };
+}
+
 QVariantMap Library::tagsForEditing(const QString &path) const
 {
     QVariantMap out;
@@ -682,6 +919,11 @@ QVariantMap Library::tagsForEditing(const QString &path) const
     out["trackTotal"] = track.second;
     out["discNumber"] = disc.first;
     out["discTotal"] = disc.second;
+    // ("0/10": a total written for a track with no number)
+    if (track.first == "0")
+        out["trackNumber"] = QString();
+    if (disc.first == "0")
+        out["discNumber"] = QString();
     // also the totals some formats keep apart (Vorbis comments: TRACKTOTAL, DISCTOTAL)
     if (track.second.isEmpty())
         out["trackTotal"] = firstValue(props, "TRACKTOTAL");
@@ -745,10 +987,16 @@ QString Library::saveTags(const QString &path, const QVariantMap &tags)
     for (const auto &[name, key] : editableTags)
         if (tags.contains(name))
             put(key, tags[name].toString());
-    // numbers as "n/total", the form every format's readers understand; a separate total (Vorbis) goes, so it can't disagree
+    // numbers as "n/total", the form every format's readers understand; a separate total (Vorbis) goes, so it can't disagree. A total
+    // with no number (set on tracks that have none) is kept on its own instead, where the format has a tag for that (else as "0/total").
+    QList<QPair<const char *, QString>> loneTotals;
     const auto numbered = [&](const char *key, const char *totalKey, const QString &number, const QString &total) {
         put(key, number.trimmed().isEmpty() ? QString() : total.trimmed().isEmpty() ? number : number.trimmed() + "/" + total.trimmed());
         props.erase(totalKey);
+        if (number.trimmed().isEmpty() && !total.trimmed().isEmpty()) {
+            put(totalKey, total);
+            loneTotals.append({ key, total.trimmed() });
+        }
     };
     // a number or a total on its own (edited across several tracks at once) goes with the file's own other half
     const auto numbers = [&](const char *key, const char *totalKey, const QString &numberName, const QString &totalName) {
@@ -762,6 +1010,15 @@ QString Library::saveTags(const QString &path, const QVariantMap &tags)
     numbers("TRACKNUMBER", "TRACKTOTAL", "trackNumber", "trackTotal");
     numbers("DISCNUMBER", "DISCTOTAL", "discNumber", "discTotal");
 
+    // a total on its own is a tag of its own (TRACKTOTAL: Vorbis comments' own, an ID3 TXXX frame), except in MP4, whose number field
+    // holds both: there it's "0/total", which players show as no number of that many. (ID3's own field can't: TagLib drops a 0 there.)
+    static const QStringList numberHoldsTotal = { "m4a", "mp4", "m4b", "aac", "alac" };
+    if (numberHoldsTotal.contains(QFileInfo(path).suffix().toLower())) {
+        for (const auto &[key, total] : loneTotals) {
+            props.erase(qstrcmp(key, "TRACKNUMBER") == 0 ? "TRACKTOTAL" : "DISCTOTAL");
+            put(key, "0/" + total);
+        }
+    }
     const TagLib::PropertyMap refused = file.setProperties(props);
     for (const auto &[name, key] : editableTags)
         if (tags.contains(name) && !tags[name].toString().trimmed().isEmpty() && refused.contains(key))
@@ -807,9 +1064,8 @@ void Library::reveal(const QString &path) const
 #endif
 }
 
-QImage CoverProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
+QImage coverImage(const QString &path)
 {
-    const QString path = QUrl::fromPercentEncoding(id.toUtf8());
     QImage image;
 
     TagLib::FileRef file = openFile(path, false);
@@ -834,6 +1090,12 @@ QImage CoverProvider::requestImage(const QString &id, QSize *size, const QSize &
                 break;
         }
     }
+    return image;
+}
+
+QImage CoverProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
+{
+    QImage image = coverImage(QUrl::fromPercentEncoding(id.toUtf8()));
     if (image.isNull()) {
         // no picture: a blank one, so the view keeps its placeholder without a warning for every such album
         image = QImage(1, 1, QImage::Format_ARGB32);

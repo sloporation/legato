@@ -3,16 +3,18 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import App
 
-// The left-hand card: the library (artists, albums, songs), then the playlists (the .m3u files in the music folders). A "+" makes a new
-// playlist. At the bottom, the settings.
+// The left-hand card: the library (artists, albums, songs), the phones plugged in (while there are any), then the playlists (the .m3u
+// files in the music folders). A "+" makes a new playlist, and songs dragged onto one are added to it. At the bottom, the settings.
 Card {
     id: bar
 
-    // what the page is showing: "artists", "albums", "songs" or "playlist" (the one at playlistPath)
+    // what the page is showing: "artists", "albums", "songs", "playlist" (the one at playlistPath) or "device" (deviceId)
     property string page: ""
     property string playlistPath: ""
+    property string deviceId: ""
     signal openPage(string page)
     signal openPlaylist(string path)
+    signal openDevice(string id)
     signal newPlaylist()
     signal openSettings()
 
@@ -62,6 +64,21 @@ Card {
             }
         }
 
+        SectionLabel { text: qsTr("Devices"); visible: Devices.devices.length > 0 }
+        Repeater {
+            model: Devices.devices
+            delegate: SidebarRow {
+                required property var modelData
+                Layout.fillWidth: true
+                Layout.leftMargin: 8
+                Layout.rightMargin: 8
+                glyph: "device-mobile"
+                label: modelData.name + (modelData.syncing ? " · " + qsTr("syncing") : "")
+                selected: bar.page === "device" && bar.deviceId === modelData.id
+                onClicked: bar.openDevice(modelData.id)
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Layout.rightMargin: 12
@@ -95,12 +112,24 @@ Card {
             ScrollBar.vertical: ScrollBar {}
             WheelScroll { view: playlists }
             delegate: SidebarRow {
+                id: playlistRow
                 required property var modelData
                 width: ListView.view.width
                 glyph: "playlist"
                 label: modelData.name
                 selected: bar.page === "playlist" && bar.playlistPath === modelData.path
+                dropTarget: drop.containsDrag
                 onClicked: bar.openPlaylist(modelData.path)
+                // songs dragged from a list: onto the end of this playlist
+                DropArea {
+                    id: drop
+                    anchors.fill: parent
+                    keys: ["application/x-legato-tracks"]
+                    onDropped: event => {
+                        Library.addToPlaylist(playlistRow.modelData.path, JSON.parse(event.getDataAsString("application/x-legato-tracks")))
+                        event.accept(Qt.CopyAction)
+                    }
+                }
             }
         }
 
