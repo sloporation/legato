@@ -8,10 +8,11 @@ struct LegatoApp: App {
     @Environment(\.scenePhase) private var phase
 
     init() {
-        let library = LibraryStore()
-        _library = State(initialValue: library)
-        _player = State(initialValue: Player(library: library))
-        _watch = State(initialValue: WatchSender(library: library))
+        // (made once and shared, as CarPlay plays from them too)
+        let model = AppModel.shared
+        _library = State(initialValue: model.library)
+        _player = State(initialValue: model.player)
+        _watch = State(initialValue: model.watch)
     }
 
     var body: some Scene {

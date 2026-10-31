@@ -12,6 +12,7 @@
 <p align="center">
   <a href="https://github.com/sloporation/legato/actions/workflows/build.yml"><img src="https://github.com/sloporation/legato/actions/workflows/build.yml/badge.svg?branch=dev" alt="Build"></a>
   <a href="https://github.com/sloporation/legato/releases/latest"><img src="https://img.shields.io/github/v/release/sloporation/legato?include_prereleases&label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MPL--2.0-blue" alt="License: MPL 2.0"></a>
 </p>
 
 ---
@@ -250,3 +251,9 @@ branding/    icon.svg, the one source for every app's icon, and export.sh, which
 - An equaliser on the phones
 - Syncing song info edited on a phone back to the desktop (playlists already go back)
 - Syncing to phones from Windows
+
+## License
+
+Legato is licensed under the [Mozilla Public License 2.0](LICENSE). You can use, change and share it, including in closed apps,
+as long as changes to Legato's own files are shared under the same license. The software it's built on keeps its own licenses:
+see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
