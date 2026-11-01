@@ -31,7 +31,7 @@ struct WatchLibraryView: View {
     var body: some View {
         List {
             if player.current != nil {
-                NavigationLink { NowPlayingView() } label: {
+                NavigationLink { WatchNowPlaying() } label: {
                     Label { Text(player.current?.displayTitle ?? "").lineLimit(1) } icon: { Image(systemName: "waveform") }
                 }
             }
@@ -91,6 +91,6 @@ struct WatchTrackList: View {
             }
         }
         .navigationTitle(title)
-        .navigationDestination(isPresented: $nowPlaying) { NowPlayingView() }
+        .navigationDestination(isPresented: $nowPlaying) { WatchNowPlaying() }
     }
 }

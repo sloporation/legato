@@ -182,7 +182,14 @@ jobs:
           cd ios
           xcodebuild -project Legato.xcodeproj -scheme Legato -destination "id=$sim" -derivedDataPath build \
               CODE_SIGNING_ALLOWED=NO test
-      # Installable builds (TestFlight) need an Apple Developer account's signing secrets; until then this checks it builds and passes.
+      - name: Build and test (Mac, with TagLib)
+        run: |
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          cd ios
+          xcodebuild -project Legato.xcodeproj -scheme LegatoMac -destination 'platform=macOS' -derivedDataPath build \
+              CODE_SIGNING_ALLOWED=NO test
+      # Installable builds (TestFlight, the Mac App Store) need an Apple Developer account's signing secrets; until then this checks
+      # they build and pass.
 
   release:
     if: github.ref_type == 'tag'

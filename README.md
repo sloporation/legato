@@ -106,6 +106,15 @@ For everything else, you can run the compiled app from Releases.
   what's new or changed is copied. Files the phone can't play (Opus on an iPhone, for example) are converted to AAC on the way,
   with ffmpeg
 
+**Legato for Mac** (native, for the Mac App Store)
+
+- The same library as Legato Desktop: Songs, Albums and Artists, `.m3u8` playlists in your music folders, tag editing (Get Info)
+  written into the files with TagLib, and a tag cache with folders watched for changes. Music folders are chosen in Settings (⌘,)
+- Search Songs by any field: `artist:floyd format:flac`, or `genre:""` for songs with no genre
+- Syncs to Legato for iPhone over Wi-Fi instead of USB, encrypted. The first time, the phone and the Mac show the same code and you
+  allow the phone on the Mac; then each phone gets what you choose for it under Phones. No conversion: the Mac only lists what
+  Apple's players play
+
 **Legato for iPhone and Android**
 
 - Your synced music in two tabs: Music (every song, searchable) and Playlists
@@ -121,6 +130,9 @@ describing the tracks and playlists.
 
 - **iPhone:** Legato Desktop writes into Legato for iPhone's own Documents folder through usbmuxd (the system service Finder and
   Xcode use), with libimobiledevice. The phone has to trust the computer once.
+- **iPhone, from Legato for Mac:** over Wi-Fi, with TLS. The Mac advertises itself with Bonjour; Sync with Mac on the phone finds it
+  and fetches what's new. The first time they pair: both show a six-digit code, and you allow the phone on the Mac if they match. The
+  Mac's App Store sandbox doesn't allow the USB route.
 - **Android:** the phone shows up as a drive (its USB setting "File transfer"), and Legato Desktop writes `Music/Legato` with
   libmtp. On first launch Legato for Android asks you to choose that folder, as Android requires.
 - **Apple Watch:** the iPhone sends the music you choose with WatchConnectivity.
@@ -192,13 +204,13 @@ cmake --build build --config Release
 Settings are kept in `legato.yaml`, in `~/.config/legato/` on macOS and Linux and `%APPDATA%\legato\` on Windows. The Open in
 Editor button in Settings opens it, and edits made by hand are picked up when you save.
 
-### Legato for iPhone and Apple Watch
+### Legato for iPhone, Apple Watch and Mac
 
-You need Xcode 16 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen). The Xcode project is generated from
-`ios/project.yml` and isn't kept in git.
+You need Xcode 16 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen), and for the Mac app, CMake. The Xcode project
+is generated from `ios/project.yml` and isn't kept in git.
 
 ```bash
-brew install xcodegen
+brew install xcodegen cmake
 ```
 
 ```bash
@@ -207,6 +219,9 @@ cd ios && xcodegen generate && open Legato.xcodeproj
 
 To run it on your own iPhone, choose your team in the Legato target's Signing & Capabilities (or set `DEVELOPMENT_TEAM` in
 `project.yml`), then build the Legato scheme to your phone. The watch app comes with it.
+
+The LegatoMac scheme builds Legato for Mac. Its first build downloads TagLib and builds it as a static library
+(`ios/TagLib/build.sh`, into `ios/TagLib/out/`), which takes a minute or two.
 
 ### Legato for Android
 
@@ -225,7 +240,7 @@ Or open `android/` in Android Studio and run it.
 ## Releases
 
 [`.github/workflows/build.yml`](.github/workflows/build.yml) builds all of it on every push and pull request to `dev`: the
-desktop app for macOS, Linux and Windows, the Android APK, and the iPhone and watch apps, with the tests. Pushing a tag makes a
+desktop app for macOS, Linux and Windows, the Android APK, and the iPhone, watch and Mac apps, with the tests. Pushing a tag makes a
 release with the packages attached:
 
 ```bash
@@ -239,7 +254,8 @@ The Android APK is signed with a release key when the repository has the secrets
 
 ```
 qt/          Legato Desktop: C++ in the top folder, QML in qml/, the config file reader (C) in core/
-ios/         Legato for iPhone (Legato/), for Apple Watch (LegatoWatch/), the code they share (Shared/), and the tests
+ios/         Legato for iPhone (Legato/), for Apple Watch (LegatoWatch/), for Mac (LegatoMac/), the code they share (Shared/),
+             the Wi-Fi sync between the Mac and the iPhone (Sync/), TagLib's build (TagLib/), and the tests
 android/     Legato for Android
 docs/        sync.md: what's on a phone, and how syncing works
 branding/    icon.svg, the one source for every app's icon, and export.sh, which renders it for each

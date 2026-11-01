@@ -6,7 +6,7 @@ import Observation
 /// changed here: the changes go into `changes.json` for the desktop to take (docs/sync.md), and the playlists show them made.
 @MainActor
 @Observable
-final class LibraryStore {
+final class LibraryStore: TrackFiles {
     private(set) var tracks: [Track] = []
     private(set) var playlists: [Playlist] = []
     private(set) var albums: [Album] = []
