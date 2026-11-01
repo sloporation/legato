@@ -24,6 +24,12 @@
 	<false/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<false/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_legato._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Legato finds Legato on your Mac on this network, to sync your music from it.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

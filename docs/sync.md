@@ -1,8 +1,9 @@
 # Syncing music to the phone and the watch
 
-Legato Desktop puts the music you choose onto Legato for iPhone over USB. Legato for iPhone puts the music you choose from that onto
-Legato for Apple Watch. There is no server and no network: the desktop writes files into the phone app's Documents folder, the way
-Finder's file sharing does, and the phone hands files to the watch with WatchConnectivity.
+Legato Desktop puts the music you choose onto Legato for iPhone over USB. Legato for Mac does the same over Wi-Fi. Legato for iPhone
+puts the music you choose from that onto Legato for Apple Watch. Over USB there is no server and no network: the desktop writes files
+into the phone app's Documents folder, the way Finder's file sharing does, and the phone hands files to the watch with
+WatchConnectivity.
 
 ## Desktop → iPhone (USB)
 
@@ -34,6 +35,56 @@ the iPhone, anything but MP3, AAC/ALAC, WAV, AIFF and FLAC (so Opus, Ogg Vorbis 
 ExoPlayer doesn't take (WMA, APE, WavPack and the like). The converted file keeps the original's `id`, `size` and `modified` in the
 manifest, so it is only converted again when the original changes. Without ffmpeg, those files are left off. Covers are named after a hash of the JPEG, so a changed cover arrives as a new
 file. On Linux, iPhones need the `usbmuxd` service running. Windows can't sync yet.
+
+## Legato for Mac → iPhone (Wi-Fi)
+
+Legato for Mac is sandboxed for the Mac App Store, which rules out usbmuxd, so it syncs over the local network instead. The Mac
+listens on TCP and advertises `_legato._tcp` with Bonjour, its id in the TXT record (`mac=<uuid>`); Sync with Mac on the phone finds
+it and connects. The phone ends up with the same `Legato/` folder, kept the same way, so it doesn't matter which app last synced it
+(both name tracks by the same hash of the file's path).
+
+Everything goes over TLS 1.2 with a pre-shared key, `TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256`
+(`ios/Sync/Wire.swift`). The pre-shared key is each phone's own, agreed when it paired; the ephemeral key exchange on top means a key
+found later can't open syncs recorded before it. TLS identities are phone ids, plus `legato-pairing`, whose key is fixed and public,
+for pairing (which is made safe by the code, not by TLS). The Mac's listener knows the keys of the phones it has allowed; it starts
+listening again (usually on another port, which Bonjour passes on) when that changes. Connections already open carry on.
+
+Each message is a 4-byte big-endian length and that much JSON; a reply that says `size` is followed by that many bytes of a file.
+The Mac speaks first on every connection, `{"ok": true, "challenge": "<32 random bytes>"}`, then the phone asks and the Mac answers.
+
+**Pairing** (`ios/Sync/Pairing.swift`), over the `legato-pairing` identity, the first time or after the Mac has forgotten the phone:
+
+1. `{"op": "pair", "phone": "<id>", "name": "…", "commitment": "<SHA-256 of the phone's Curve25519 public key>"}`. The Mac answers
+   `{"ok": true, "mac": "<its id>", "key": "<its Curve25519 public key>"}`.
+2. `{"op": "pair", "key": "<the phone's public key>"}`, which has to match the commitment. Both work out the same 32-byte key, and a
+   six-digit code, with HKDF-SHA256 from the shared secret (salt: the phone's public key then the Mac's; info `legato sync key` and
+   `legato pairing code`). The Mac answers `{"ok": true, "waiting": true}` and shows "“iPhone” wants to sync with this Mac" with the
+   code; the phone shows the code too.
+3. Allowed on the Mac, it answers `{"ok": true}` once it is listening with the phone's key; Don't Allow, `{"ok": false, "why": …}`, and
+   that phone can't pair again until it's forgotten on the Mac. The phone stays connected meanwhile; if it hangs up, the Mac stops
+   asking.
+
+Someone in the middle would have to give each side their own public key, and then the codes differ (one chance in a million that they
+don't): the phone's commitment means they have to choose the key they give the phone before seeing the phone's, so they can't search
+for one that makes the codes match. The phone keeps a key per Mac id; the Mac keeps a key per phone.
+
+**Syncing**, over the phone's own identity and key:
+
+1. `{"op": "hello", "phone": "<id>", "name": "…", "proof": "<HMAC-SHA256 of the challenge and the phone id, with the key>", "chosen":
+   {…}, "batch": "…", "changes": […]}`. The proof says which phone this is (TLS says only that it is one the Mac allowed). With no
+   proof that fits, the Mac answers `{"ok": false, "unpaired": true}`, and the phone pairs again; it does that too when TLS fails. The
+   Mac makes the playlist changes, then answers with the manifest of what the phone is to have (`{"ok": true, "manifest": {…}}`), its
+   files named `Music/<id>.<ext>` and `Covers/<hash>.jpg`.
+2. `{"op": "file", "path": "Music/<id>.flac"}` for each file the phone hasn't got (by `id`, `size` and `modified`, as over USB), and
+   each cover. The phone writes it as `.part` and renames it into place.
+3. The phone writes the manifest, deletes what it no longer names, and says `{"op": "done"}`; the Mac answers once it has noted it.
+
+(Byte strings are base64 in the JSON.)
+
+What a phone gets is chosen on the Mac, under Phones (everything, or playlists, artists and albums), starting from the manifest's
+`chosen` the first time. Playlist changes go as over USB, except that the phone sends them: `changes.json` goes onto the end of
+`changes.applying.json`, which has a `batch` name; the Mac remembers how many of a batch it has made, so a sync that didn't finish
+never makes one twice. The phone deletes `changes.applying.json` once it has the new manifest.
 
 ## Desktop → Android (USB)
 

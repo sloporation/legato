@@ -8,13 +8,17 @@ struct Manifest: Codable, Equatable {
     var source: String?
     var tracks: [Track] = []
     var playlists: [Playlist] = []
+    /// what the desktop was told to put on this phone, so the next sync (from any computer) starts from it; the phones only pass it on
+    var chosen: Chosen?
 
-    init(version: Int = 1, generated: Date? = nil, source: String? = nil, tracks: [Track] = [], playlists: [Playlist] = []) {
+    init(version: Int = 1, generated: Date? = nil, source: String? = nil, tracks: [Track] = [], playlists: [Playlist] = [],
+         chosen: Chosen? = nil) {
         self.version = version
         self.generated = generated
         self.source = source
         self.tracks = tracks
         self.playlists = playlists
+        self.chosen = chosen
     }
 
     init(from decoder: Decoder) throws {
@@ -24,6 +28,7 @@ struct Manifest: Codable, Equatable {
         source = try c.decodeIfPresent(String.self, forKey: .source)
         tracks = try c.decodeIfPresent([Track].self, forKey: .tracks) ?? []
         playlists = try c.decodeIfPresent([Playlist].self, forKey: .playlists) ?? []
+        chosen = try? c.decodeIfPresent(Chosen.self, forKey: .chosen)
     }
 
     static func decode(_ data: Data) throws -> Manifest {
@@ -37,6 +42,28 @@ struct Manifest: Codable, Equatable {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(self)
+    }
+}
+
+/// What goes on a phone: everything, or these playlists, artists and albums (Track.albumKey).
+struct Chosen: Codable, Equatable, Hashable {
+    var everything = false
+    var playlists: [String] = []
+    var artists: [String] = []
+    var albums: [String] = []
+
+    static let all = Chosen(everything: true)
+
+    init(everything: Bool = false, playlists: [String] = [], artists: [String] = [], albums: [String] = []) {
+        self.everything = everything; self.playlists = playlists; self.artists = artists; self.albums = albums
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        everything = try c.decodeIfPresent(Bool.self, forKey: .everything) ?? false
+        playlists = try c.decodeIfPresent([String].self, forKey: .playlists) ?? []
+        artists = try c.decodeIfPresent([String].self, forKey: .artists) ?? []
+        albums = try c.decodeIfPresent([String].self, forKey: .albums) ?? []
     }
 }
 

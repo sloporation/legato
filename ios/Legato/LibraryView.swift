@@ -15,7 +15,7 @@ struct HomeView: View {
                 ContentUnavailableView {
                     Label("No Music Yet", systemImage: "music.note")
                 } description: {
-                    Text(library.problem ?? String(localized: "Plug your iPhone into your computer, open Legato there, and choose the playlists, artists and albums to put on it."))
+                    Text(library.problem ?? String(localized: "Open Legato on your Mac and choose Sync with Mac from the menu, or plug your iPhone into your computer and sync from Legato there."))
                 }
             } else {
                 TrackList(tracks: tracks, style: .artwork) {

@@ -55,3 +55,25 @@ final class ChangesTests: XCTestCase {
         XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("after"))
     }
 }
+
+/// What a sync from Legato for Mac fetches and deletes (Sync/SyncClient.swift).
+final class SyncPlanTests: XCTestCase {
+    private func track(_ id: String, size: Int64 = 10, ext: String = "mp3") -> Track {
+        Track(id: id, file: "Music/\(id).\(ext)", size: size, modified: Date(timeIntervalSince1970: 1000))
+    }
+
+    func testKeepsWhatIsThereUnchanged() {
+        let old = Manifest(tracks: [track("a"), track("b"), track("c")])
+        let new = Manifest(tracks: [track("a"), track("b", size: 20), track("d")])
+        let plan = SyncClient.plan(old: old, new: new, have: ["a.mp3", "b.mp3", "c.mp3", "x.mp3.part"])
+        XCTAssertEqual(plan.fetch.map(\.id), ["b", "d"])
+        XCTAssertEqual(plan.remove, ["c.mp3", "x.mp3.part"])
+        XCTAssertEqual(plan.bytes, 30)
+    }
+
+    func testFetchesAFileThatIsMissing() {
+        let m = Manifest(tracks: [track("a")])
+        XCTAssertEqual(SyncClient.plan(old: m, new: m, have: []).fetch.map(\.id), ["a"])
+        XCTAssertEqual(SyncClient.plan(old: nil, new: m, have: ["a.mp3"]).fetch.map(\.id), ["a"])
+    }
+}

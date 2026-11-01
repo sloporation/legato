@@ -22,6 +22,13 @@ final class WatchSender: NSObject {
     private(set) var selection: Set<Item> = [] { didSet { save() } }
     /// Track ids the watch says it has.
     private(set) var onWatch: Set<String> = [] { didSet { save() } }
+    /// The last sync sent (its manifest's id), and whether the watch has said it got it. The files can all go and still not arrive,
+    /// so this waits for the watch's word; `unconfirmed` once it has waited long enough after the last file went.
+    private(set) var sent: String?
+    private(set) var confirmed: String?
+    private(set) var unconfirmed = false
+    var waitingForWatch: Bool { sent != nil && sent != confirmed }
+    private var confirmationWait: Task<Void, Never>?
 
     private let library: LibraryStore
     private let session: WCSession? = WCSession.isSupported() ? .default : nil
@@ -97,9 +104,14 @@ final class WatchSender: NSObject {
         }
         let manifest = Manifest(generated: .now, source: String(localized: "Legato on iPhone"), tracks: tracks, playlists: playlists)
         do {
-            let url = FileManager.default.temporaryDirectory.appending(path: "watch-manifest-\(UUID().uuidString).json")
+            let id = UUID().uuidString
+            let url = FileManager.default.temporaryDirectory.appending(path: "watch-manifest-\(id).json")
             try manifest.encoded().write(to: url)
-            session.transferFile(url, metadata: ["kind": "manifest"])
+            session.transferFile(url, metadata: ["kind": "manifest", "id": id])
+            sent = id
+            unconfirmed = false
+            confirmationWait?.cancel()
+            confirmationWait = nil
         } catch {
             problem = error.localizedDescription
         }
@@ -111,6 +123,15 @@ final class WatchSender: NSObject {
         isPaired = session.isPaired
         isAppInstalled = session.isWatchAppInstalled
         pendingTransfers = session.outstandingFileTransfers.filter { $0.isTransferring || !$0.progress.isFinished }.count
+        // everything has gone: give the watch a while to say it has it
+        if waitingForWatch && pendingTransfers == 0 && confirmationWait == nil && !unconfirmed {
+            confirmationWait = Task {
+                try? await Task.sleep(for: .seconds(45))
+                guard !Task.isCancelled else { return }
+                if self.waitingForWatch { self.unconfirmed = true }
+                self.confirmationWait = nil
+            }
+        }
     }
 }
 
@@ -134,11 +155,16 @@ extension WatchSender: WCSessionDelegate {
         }
     }
 
-    /// The watch says what it has: `{"have": [track ids]}`.
+    /// The watch says what it has: `{"have": [track ids], "manifest": "<the id of the last sync it got>"}`.
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         guard let have = userInfo["have"] as? [String] else { return }
+        let manifest = userInfo["manifest"] as? String
         Task { @MainActor in
             self.onWatch = Set(have)
+            if let manifest {
+                self.confirmed = manifest
+                if manifest == self.sent { self.unconfirmed = false }
+            }
             self.refresh()
         }
     }

@@ -1,7 +1,19 @@
 import AVFoundation
 import MediaPlayer
 import Observation
+#if os(macOS)
+import AppKit
+#else
 import UIKit
+#endif
+
+/// Where the player finds a track's file and cover: the synced folder on the iPhone and watch (LibraryStore), the music folders on
+/// the Mac (MusicFolders).
+@MainActor
+protocol TrackFiles: AnyObject {
+    func url(for track: Track) -> URL
+    func coverURL(_ relative: String?) -> URL?
+}
 
 /// Plays music. The app hands it a list (`play(_:from:)`) and it owns what happens next: the order (shuffle), repeat, moving on at the
 /// end of a track or past one that won't play. It also answers the lock screen, Control Center, headphone buttons and the watch's
@@ -23,8 +35,15 @@ final class Player {
         set { queue.repeatMode = newValue }
     }
     var upNext: [Track] { queue.upNext }
+    /// Legato's own volume, under the system's (the Mac's player bar; on the phone it's left at 1).
+    var volume: Float = 1 {
+        didSet { player.volume = volume }
+    }
+    var muted = false {
+        didSet { player.isMuted = muted }
+    }
 
-    private let library: LibraryStore
+    private let library: any TrackFiles
     private var queue = PlayQueue()
     private let player = AVPlayer()
     private var timeObserver: Any?
@@ -33,7 +52,7 @@ final class Player {
     private var failures = 0                   // tracks in a row that wouldn't play: give up when it's all of them
     private var sessionReady = false
 
-    init(library: LibraryStore) {
+    init(library: any TrackFiles) {
         self.library = library
         player.automaticallyWaitsToMinimizeStalling = false     // local files: start at once
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
@@ -151,6 +170,11 @@ final class Player {
 
     // MARK: the audio session
 
+    #if os(macOS)
+    // the Mac has no audio session: it just plays
+    private func activateSession() async -> Bool { true }
+    private func observeSession() {}
+    #else
     /// Music keeps playing in the background and with the ring switch on. On the watch it plays only through Bluetooth headphones:
     /// activating asks for them (the system shows its picker) and fails if none is chosen.
     private func activateSession() async -> Bool {
@@ -190,6 +214,7 @@ final class Player {
             }
         }
     }
+    #endif
 
     // MARK: lock screen, Control Center, headphones
 
@@ -217,9 +242,19 @@ final class Player {
             MPNowPlayingInfoPropertyElapsedPlaybackTime: position,
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
         ]
-        if let url = library.coverURL(track.cover), let image = UIImage(contentsOfFile: url.path) {
+        if let url = library.coverURL(track.cover), let image = Self.image(at: url) {
             info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
         }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        #if os(macOS)
+        // the Mac routes the media keys and Control Center to whichever app says it is playing
+        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
+        #endif
     }
+
+    #if os(macOS)
+    private static func image(at url: URL) -> NSImage? { NSImage(contentsOf: url) }
+    #else
+    private static func image(at url: URL) -> UIImage? { UIImage(contentsOfFile: url.path) }
+    #endif
 }

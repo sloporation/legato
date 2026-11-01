@@ -10,6 +10,7 @@ enum Route: Hashable {
     case settings
     case equaliser
     case watchSync
+    case macSync
 }
 
 /// The navigation stack's path, so a long-press menu deep in a list can open an album or an artist.
@@ -53,6 +54,7 @@ private struct Stack<Root: View>: View {
                         case .settings: SettingsView()
                         case .equaliser: EqualiserView()
                         case .watchSync: WatchView()
+                        case .macSync: MacSyncView()
                         }
                     }
                     .withMiniPlayer { showingNowPlaying = true }
@@ -63,7 +65,7 @@ private struct Stack<Root: View>: View {
     }
 }
 
-/// The cog at the top right of each tab: Settings, Equaliser and Watch Sync.
+/// The cog at the top right of each tab: Settings, Equaliser, Sync with Mac and Watch Sync.
 private struct AppMenu: ViewModifier {
     @Environment(Navigator.self) private var navigator
 
@@ -73,6 +75,7 @@ private struct AppMenu: ViewModifier {
                 Menu {
                     Button { navigator.go(.settings) } label: { Label("Settings", systemImage: "gearshape") }
                     Button { navigator.go(.equaliser) } label: { Label("Equaliser", systemImage: "slider.vertical.3") }
+                    Button { navigator.go(.macSync) } label: { Label("Sync with Mac", systemImage: "laptopcomputer") }
                     Button { navigator.go(.watchSync) } label: { Label("Watch Sync", systemImage: "applewatch") }
                 } label: {
                     Image(systemName: "gearshape")
