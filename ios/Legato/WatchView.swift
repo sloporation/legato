@@ -25,7 +25,16 @@ struct WatchView: View {
                     .disabled(watch.selection.isEmpty && watch.onWatch.isEmpty)
                 }
                 if let problem = watch.problem { Text(problem).foregroundStyle(.red).font(.callout) }
-                if watch.waitingForWatch && watch.pendingTransfers == 0 {
+                if (watch.waitingForWatch || watch.pendingTransfers > 0) && !watch.unconfirmed
+                    && watch.syncedCount < watch.wantedTracks.count {
+                    // the watch says what it has after each song, so this moves as they arrive (and songs still on their way after
+                    // the app was closed show here too)
+                    ProgressView(value: Double(watch.syncedCount), total: Double(max(watch.wantedTracks.count, 1))) {
+                        Text("On the watch: \(watch.syncedCount) of \(watch.wantedTracks.count) songs")
+                    } currentValueLabel: {
+                        Text("Songs take a while each. Keep the watch near the iPhone; it carries on in the background.")
+                    }
+                } else if watch.waitingForWatch && watch.pendingTransfers == 0 {
                     if watch.unconfirmed {
                         Label("The watch hasn't said it got this sync. Open Legato on the watch, keep it near the iPhone, and sync again.",
                               systemImage: "exclamationmark.triangle")
