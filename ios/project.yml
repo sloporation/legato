@@ -9,6 +9,10 @@ options:
     watchOS: "10.0"
     macOS: "14.0"
   createIntermediateGroups: true
+# Tether: local-network pairing and encrypted sessions, shared with Liftbro. A checkout beside this one (../../tether from ios/).
+packages:
+  Tether:
+    path: ../../tether
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -38,7 +42,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         # Legato Desktop writes the synced music into Documents over USB (house_arrest), as Finder's file sharing does
         UIFileSharingEnabled: true
-        # Legato for Mac syncs over Wi-Fi instead: the phone finds it with Bonjour (Sync/Wire.swift)
+        # Legato for Mac syncs over Wi-Fi instead: the phone finds it with Bonjour (Tether, Sync/SyncWire.swift)
         NSLocalNetworkUsageDescription: Legato finds Legato on your Mac on this network, to sync your music from it.
         NSBonjourServices: [_legato._tcp]
         LSSupportsOpeningDocumentsInPlace: false
@@ -56,6 +60,7 @@ targets:
         "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Legato/CarPlay.entitlements
     dependencies:
       - target: LegatoWatch
+      - package: Tether
 
   LegatoWatch:
     type: application
@@ -85,6 +90,8 @@ targets:
       - Sync
       - path: ../qt/icons/legato.icns
         buildPhase: resources
+    dependencies:
+      - package: Tether
     preBuildScripts:
       - name: TagLib
         script: '"$SRCROOT/TagLib/build.sh"'
@@ -106,8 +113,10 @@ targets:
         # the music folders, chosen in the open panel and kept as security-scoped bookmarks: read-write, for tags and playlists
         com.apple.security.files.user-selected.read-write: true
         com.apple.security.files.bookmarks.app-scope: true
-        # phones sync from it over Wi-Fi (Sync/Wire.swift)
+        # phones sync from it over Wi-Fi (Tether, Sync/SyncWire.swift)
         com.apple.security.network.server: true
+        # Tether keeps the phones' pairing keys in the data protection keychain, so they survive rebuilds and updates
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.sloporation.legato"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sloporation.legato
@@ -130,6 +139,8 @@ targets:
       - path: LegatoTests/Fixtures
         type: folder
         buildPhase: resources
+    dependencies:
+      - package: Tether
     preBuildScripts:
       - name: TagLib
         script: '"$SRCROOT/TagLib/build.sh"'

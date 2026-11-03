@@ -1,10 +1,10 @@
-import CryptoKit
-import Network
 import SwiftUI
+import Tether
 import UIKit
 
 /// Sync with Mac (from the cog menu): finds Legato for Mac on this network and fetches the music chosen for this phone there. The
-/// first time, the phone pairs: it and the Mac show the same code, and the Mac asks whether to allow it. (docs/sync.md)
+/// first time, the phone pairs: it and the Mac show the same code, and the Mac asks whether to allow it. Tether does the finding,
+/// pairing and connecting (docs/sync.md).
 @MainActor
 @Observable
 final class MacSync {
@@ -16,24 +16,21 @@ final class MacSync {
         case failed(String)
     }
 
-    struct Mac: Identifiable, Hashable {
-        var id: String              // its id, from the Bonjour TXT record
-        var name: String
-        var endpoint: NWEndpoint
-    }
-
-    private(set) var macs: [Mac] = []
     private(set) var state = State.idle
     private(set) var done: Int64 = 0
     private(set) var total: Int64 = 0
     private(set) var what = ""
-    private var browser: NWBrowser?
     private var task: Task<Void, Never>?
     private let library: LibraryStore
+    private let client = TetherClient(configuration: SyncWire.configuration, name: UIDevice.current.name)
 
     init(library: LibraryStore) {
         self.library = library
     }
+
+    /// The Macs running Legato on this network now, by name.
+    var macs: [TetherClient.Host] { client.discovered.sorted { $0.name < $1.name } }
+    var problem: String? { client.problem }
 
     var busy: Bool {
         switch state {
@@ -42,46 +39,32 @@ final class MacSync {
         }
     }
 
-    func look() {
-        guard browser == nil else { return }
-        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: Wire.service, domain: nil), using: .tcp)
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
-            let found = results.compactMap { result -> Mac? in
-                guard case .service(let name, _, _, _) = result.endpoint, case .bonjour(let txt) = result.metadata,
-                      let id = txt["mac"] else { return nil }
-                return Mac(id: id, name: name, endpoint: result.endpoint)
-            }
-            Task { @MainActor in self?.macs = found.sorted { $0.name < $1.name } }
-        }
-        browser.start(queue: .main)
-        self.browser = browser
-    }
+    func look() { client.startBrowsing() }
 
     func stop() {
-        browser?.cancel()
-        browser = nil
-        task?.cancel()
+        client.stopBrowsing()
+        task?.cancel()          // (a pairing hangs up: the Mac stops asking)
         if busy { state = .idle }
     }
 
-    func sync(with mac: Mac) {
+    func sync(with mac: TetherClient.Host) {
         task?.cancel()
         state = .syncing(String(localized: "Connecting to \(mac.name)"))
         done = 0
         total = 0
         task = Task {
             do {
-                if let key = Self.keys[mac.id] {
+                if client.isPaired(mac.id) {
                     do {
-                        try await sync(with: mac, key: key)
+                        try await sync(with: mac)
                         return
-                    } catch let error where Self.unpaired(error) {
-                        Self.keys[mac.id] = nil     // (the Mac forgot this phone: pair again)
+                    } catch TetherError.unpaired {
+                        // the Mac forgot this phone (Tether has forgotten it here too): pair again
                     }
                 }
-                let key = try await pair(with: mac)
+                try await client.pair(with: mac) { code in self.state = .pairing(mac: mac.name, code: code) }
                 state = .syncing(String(localized: "Connecting to \(mac.name)"))
-                try await sync(with: mac, key: key)
+                try await sync(with: mac)
             } catch is CancellationError {
             } catch {
                 library.reload(force: true)
@@ -90,27 +73,10 @@ final class MacSync {
         }
     }
 
-    private func pair(with mac: Mac) async throws -> SymmetricKey {
-        let wire = WireConnection(NWConnection(to: mac.endpoint, using: Wire.pairingParameters()))
-        defer { wire.cancel() }
-        try await wire.start()
-        let paired = try await withTaskCancellationHandler {
-            try await SyncClient.pair(wire, as: Self.identity) { code in
-                Task { @MainActor in self.state = .pairing(mac: mac.name, code: code) }
-            }
-        } onCancel: {
-            wire.cancel()       // (the page was closed: the Mac stops asking)
-        }
-        Self.keys[paired.mac] = paired.key
-        return paired.key
-    }
-
-    private func sync(with mac: Mac, key: SymmetricKey) async throws {
-        let identity = Self.identity
-        let wire = WireConnection(NWConnection(to: mac.endpoint, using: Wire.phoneParameters(identity: identity.phone, key: key)))
-        defer { wire.cancel() }
-        try await wire.start()
-        let client = SyncClient(root: library.root, identity: identity, key: key) { done, total, what in
+    private func sync(with mac: TetherClient.Host) async throws {
+        let session = try await client.connect(to: mac)
+        defer { session.close() }
+        let sync = SyncClient(root: library.root) { done, total, what in
             Task { @MainActor in
                 self.done = done
                 self.total = total
@@ -118,42 +84,12 @@ final class MacSync {
                 self.state = .syncing(what)
             }
         }
-        let outcome = try await client.sync(wire)
+        let outcome = try await sync.sync(session)
         library.reload(force: true)
         if case .synced(let copied, let removed) = outcome {
             state = .done(copied == 0 && removed == 0 ? String(localized: "Up to date.")
                           : String(localized: "\(copied) songs copied, \(removed) removed."))
         }
-    }
-
-    /// The Mac doesn't know this phone's key (forgotten there): TLS fails, or the hello says so.
-    private static func unpaired(_ error: Error) -> Bool {
-        if case SyncClient.Failure.unpaired = error { return true }
-        if case NWError.tls = error { return true }
-        return false
-    }
-
-    /// The keys agreed with the Macs this phone has paired with: Mac id → key.
-    private static var keys: [String: SymmetricKey] {
-        get {
-            let saved = UserDefaults.standard.dictionary(forKey: "mac.keys") as? [String: Data] ?? [:]
-            return saved.mapValues { SymmetricKey(data: $0) }
-        }
-        set {
-            UserDefaults.standard.set(newValue.mapValues(\.data), forKey: "mac.keys")
-        }
-    }
-
-    /// Who this phone is to the Mac: made once and kept.
-    private static var identity: SyncClient.Identity {
-        let key = "mac.identity"
-        if let data = UserDefaults.standard.data(forKey: key), var id = try? JSONDecoder().decode(SyncClient.Identity.self, from: data) {
-            id.name = UIDevice.current.name
-            return id
-        }
-        let id = SyncClient.Identity(phone: UUID().uuidString, name: UIDevice.current.name)
-        UserDefaults.standard.set(try? JSONEncoder().encode(id), forKey: key)
-        return id
     }
 }
 
@@ -165,7 +101,9 @@ struct MacSyncView: View {
         List {
             if let sync {
                 Section {
-                    if sync.macs.isEmpty {
+                    if let problem = sync.problem {
+                        Label(problem, systemImage: "exclamationmark.triangle").foregroundStyle(.secondary)
+                    } else if sync.macs.isEmpty {
                         Label("Looking for Legato on your Mac…", systemImage: "magnifyingglass")
                             .foregroundStyle(.secondary)
                     }
