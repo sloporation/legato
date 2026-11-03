@@ -22,6 +22,7 @@ final class WatchReceiver: NSObject, WCSessionDelegate {
     }
 
     func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
+        NSLog("legato watch sync: session %d, error %@", state.rawValue, error.map { String(describing: $0) } ?? "none")
         if state == .activated { reportWhatWeHave() }
         Task { @MainActor in self.remote.reachabilityChanged() }
     }
@@ -38,6 +39,7 @@ final class WatchReceiver: NSObject, WCSessionDelegate {
         // the file is deleted when this returns: move it now
         let fm = FileManager.default
         let kind = file.metadata?["kind"] as? String
+        NSLog("legato watch sync: got %@ %@", kind ?? "?", file.metadata?["file"] as? String ?? file.fileURL.lastPathComponent)
         do {
             switch kind {
             case "track", "cover":
@@ -94,6 +96,7 @@ final class WatchReceiver: NSObject, WCSessionDelegate {
         if let manifest = UserDefaults.standard.string(forKey: "manifest.id") { info["manifest"] = manifest }
         for old in session.outstandingUserInfoTransfers where old.userInfo["have"] != nil { old.cancel() }     // (only the latest matters)
         session.transferUserInfo(info)
+        NSLog("legato watch sync: told the iPhone we have %d tracks", ids.count)
     }
 
     /// Only into our own folder: no "..", no absolute paths.

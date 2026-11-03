@@ -111,6 +111,8 @@ final class WatchSender: NSObject {
             let url = FileManager.default.temporaryDirectory.appending(path: "watch-manifest-\(id).json")
             try manifest.encoded().write(to: url)
             session.transferFile(url, metadata: ["kind": "manifest", "id": id])
+            NSLog("legato watch sync: %d tracks chosen, %d waiting to go (the manifest last), %d the watch has", tracks.count,
+                  session.outstandingFileTransfers.count, onWatch.count)
             sent = id
             unconfirmed = false
             confirmationWait?.cancel()
@@ -167,6 +169,8 @@ extension WatchSender: WCSessionDelegate {
         // (manifests are cancelled on purpose when a newer one replaces them)
         let replaced = fileTransfer.file.metadata?["kind"] as? String == "manifest"
         let message = error?.localizedDescription
+        NSLog("legato watch sync: sent %@ %@: %@", fileTransfer.file.metadata?["kind"] as? String ?? "?",
+              fileTransfer.file.fileURL.lastPathComponent, error.map { String(describing: $0) } ?? "ok")
         Task { @MainActor in
             if let message, !replaced { self.problem = message }
             self.refresh()
@@ -176,6 +180,7 @@ extension WatchSender: WCSessionDelegate {
     /// The watch says what it has: `{"have": [track ids], "manifest": "<the id of the last sync it got>"}`.
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         guard let have = userInfo["have"] as? [String] else { return }
+        NSLog("legato watch sync: the watch has %d tracks, manifest %@", have.count, userInfo["manifest"] as? String ?? "none")
         let manifest = userInfo["manifest"] as? String
         Task { @MainActor in
             self.onWatch = Set(have)
