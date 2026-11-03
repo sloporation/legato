@@ -38,7 +38,7 @@ struct WatchRootView: View {
     var body: some View {
         NavigationStack {
             if phone.connected {
-                WatchLibraryView(library: phone.library, playback: phone, phone: phone, onWatch: player)
+                WatchLibraryView(library: phone.library, playback: phone, phone: phone, onWatch: player, watchLibrary: library)
             } else if phone.decided {
                 WatchLibraryView(library: library, playback: player)
             } else {
@@ -56,6 +56,9 @@ struct WatchLibraryView: View {
     var phone: PhoneRemote? = nil
     /// The watch's own player, while the iPhone's library shows: what it's still playing, if anything.
     var onWatch: Player? = nil
+    /// The music on the watch, while the iPhone's library shows: a row at the end opens it.
+    var watchLibrary: LibraryStore? = nil
+    var title: LocalizedStringKey? = nil
 
     var body: some View {
         List {
@@ -104,8 +107,22 @@ struct WatchLibraryView: View {
                     Label("Songs", systemImage: "music.note")
                 }
             }
+            if let watchLibrary, let onWatch {
+                Section {
+                    NavigationLink {
+                        WatchLibraryView(library: watchLibrary, playback: onWatch, title: "On This Watch")
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Label("On This Watch", systemImage: "applewatch")
+                            Text(watchLibrary.tracks.isEmpty ? "No music yet" : "\(watchLibrary.tracks.count) songs")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
         }
-        .navigationTitle(phone == nil ? "Legato" : "iPhone")
+        .navigationTitle(title ?? (phone == nil ? "Legato" : "iPhone"))
     }
 
     private func list(_ title: String, _ groups: [(String, [Track], Remote.Source)]) -> some View {
