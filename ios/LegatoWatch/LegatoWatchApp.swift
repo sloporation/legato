@@ -5,63 +5,111 @@ import WatchKit
 struct LegatoWatchApp: App {
     @State private var library: LibraryStore
     @State private var player: Player
+    @State private var phone: PhoneRemote
     private let receiver: WatchReceiver
+    @Environment(\.scenePhase) private var phase
 
     init() {
         let library = LibraryStore()
+        let phone = PhoneRemote()
         _library = State(initialValue: library)
         _player = State(initialValue: Player(library: library))
-        receiver = WatchReceiver(root: library.root) { library.reload(force: true) }
+        _phone = State(initialValue: phone)
+        receiver = WatchReceiver(root: library.root, remote: phone) { library.reload(force: true) }
     }
 
     var body: some Scene {
         WindowGroup {
-            NavigationStack { WatchLibraryView() }
+            WatchRootView()
                 .environment(library)
                 .environment(player)
+                .environment(phone)
+                .onChange(of: phase, initial: true) { _, phase in phone.setActive(phase == .active) }
         }
     }
 }
 
-/// What's on the watch: Now Playing, then Playlists, Albums, Artists and Songs.
-struct WatchLibraryView: View {
+/// The iPhone's library while the iPhone is in reach (the watch is its remote), else the music on the watch.
+struct WatchRootView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
+    @Environment(PhoneRemote.self) private var phone
+
+    var body: some View {
+        NavigationStack {
+            if phone.connected {
+                WatchLibraryView(library: phone.library, playback: phone, phone: phone, onWatch: player)
+            } else if phone.decided {
+                WatchLibraryView(library: library, playback: player)
+            } else {
+                ProgressView("Looking for your iPhone…")
+            }
+        }
+        .id(phone.connected)        // (a fresh stack when it swaps)
+    }
+}
+
+/// A library: Now Playing, then Playlists, Albums, Artists and Songs. The iPhone's (with `phone`), or the watch's own.
+struct WatchLibraryView: View {
+    let library: LibraryStore
+    let playback: any Playback
+    var phone: PhoneRemote? = nil
+    /// The watch's own player, while the iPhone's library shows: what it's still playing, if anything.
+    var onWatch: Player? = nil
 
     var body: some View {
         List {
-            if player.current != nil {
-                NavigationLink { WatchNowPlaying() } label: {
-                    Label { Text(player.current?.displayTitle ?? "").lineLimit(1) } icon: { Image(systemName: "waveform") }
+            if let current = playback.current {
+                NavigationLink { WatchNowPlaying(playback: playback) } label: {
+                    Label { Text(current.displayTitle).lineLimit(1) } icon: { Image(systemName: "waveform") }
+                }
+            }
+            if let onWatch, onWatch.isPlaying, let current = onWatch.current {
+                NavigationLink { WatchNowPlaying(playback: onWatch) } label: {
+                    Label { Text("On Watch: \(current.displayTitle)").lineLimit(1) } icon: { Image(systemName: "applewatch") }
                 }
             }
             if library.tracks.isEmpty {
-                Text("Choose music for your watch in Legato on your iPhone: the cog menu, then Watch Sync.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                if let phone {
+                    if phone.loading {
+                        HStack { ProgressView().frame(width: 20); Text("Getting your iPhone's music…").font(.footnote) }
+                    } else {
+                        Text("There's no music in Legato on your iPhone yet.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Choose music for your watch in Legato on your iPhone: the cog menu, then Watch Sync.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 if !library.playlists.isEmpty {
-                    NavigationLink { list("Playlists", library.playlists.map { ($0.name, library.tracks(of: $0)) }) } label: {
+                    NavigationLink {
+                        list("Playlists", library.playlists.map { ($0.name, library.tracks(of: $0), .playlist($0.name)) })
+                    } label: {
                         Label("Playlists", systemImage: "music.note.list")
                     }
                 }
-                NavigationLink { list("Albums", library.albums.map { ($0.title, $0.tracks) }) } label: {
+                NavigationLink { list("Albums", library.albums.map { ($0.title, $0.tracks, .album($0.id)) }) } label: {
                     Label("Albums", systemImage: "square.stack")
                 }
-                NavigationLink { list("Artists", library.artists.map { ($0.name, $0.tracks) }) } label: {
+                NavigationLink { list("Artists", library.artists.map { ($0.name, $0.tracks, .artist($0.name)) }) } label: {
                     Label("Artists", systemImage: "music.mic")
                 }
-                NavigationLink { WatchTrackList(title: "Songs", tracks: library.songsByTitle) } label: {
+                NavigationLink { WatchTrackList(title: "Songs", tracks: library.songsByTitle, source: .songs, playback: playback) } label: {
                     Label("Songs", systemImage: "music.note")
                 }
             }
         }
-        .navigationTitle("Legato")
+        .navigationTitle(phone == nil ? "Legato" : "iPhone")
     }
 
-    private func list(_ title: String, _ groups: [(String, [Track])]) -> some View {
-        List(groups, id: \.0) { name, tracks in
-            NavigationLink { WatchTrackList(title: name, tracks: tracks) } label: { Text(name).lineLimit(2) }
+    private func list(_ title: String, _ groups: [(String, [Track], Remote.Source)]) -> some View {
+        List(groups, id: \.0) { name, tracks, source in
+            NavigationLink { WatchTrackList(title: name, tracks: tracks, source: source, playback: playback) } label: {
+                Text(name).lineLimit(2)
+            }
         }
         .navigationTitle(title)
     }
@@ -71,16 +119,16 @@ struct WatchLibraryView: View {
 struct WatchTrackList: View {
     let title: String
     let tracks: [Track]
-    @Environment(Player.self) private var player
+    let source: Remote.Source
+    let playback: any Playback
     @State private var nowPlaying = false
 
     var body: some View {
         List {
-            Button { player.shufflePlay(tracks); nowPlaying = true } label: { Label("Shuffle", systemImage: "shuffle") }
+            Button { playback.shufflePlay(tracks, source: source); nowPlaying = true } label: { Label("Shuffle", systemImage: "shuffle") }
             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                 Button {
-                    player.shuffle = false
-                    player.play(tracks, from: index)
+                    playback.play(tracks, from: index, source: source)
                     nowPlaying = true
                 } label: {
                     VStack(alignment: .leading) {
@@ -91,6 +139,6 @@ struct WatchTrackList: View {
             }
         }
         .navigationTitle(title)
-        .navigationDestination(isPresented: $nowPlaying) { WatchNowPlaying() }
+        .navigationDestination(isPresented: $nowPlaying) { WatchNowPlaying(playback: playback) }
     }
 }

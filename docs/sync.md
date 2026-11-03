@@ -159,3 +159,25 @@ The iPhone app keeps its own choice of playlists, albums and artists for the wat
 The watch keeps the files under its own `Documents/Legato/`, writes the manifest there, and deletes the files the manifest no longer
 names. Transfers continue in the background and may arrive in any order, so the watch only shows tracks whose file has arrived. The
 watch tells the phone what it has (`transferUserInfo`, `{"have": [ids]}`) so nothing is sent twice.
+
+## The watch as a remote
+
+While the iPhone is in reach (`WCSession.isReachable`), Legato on the watch is a remote for Legato on the iPhone: it shows the iPhone's
+library, and what it chooses plays on the iPhone, through whatever the iPhone plays through (headphones go with the iPhone while it's
+near). Out of reach for more than a few seconds, the watch shows and plays the music synced to it, as above. The two talk with
+`sendMessage`, which wakes the iPhone app if it isn't running; every message from the watch gets an answer.
+
+- `{"op": "catalog", "have": "<version>"}`: the iPhone's library, as a manifest of its tracks (without covers) and playlists, JSON
+  compressed with LZFSE. The answer is `{"version": "<hash of it>", "pieces": n}`, with `n` 0 when the watch has that version
+  already; the watch then asks `{"op": "piece", "version": …, "index": i}` for each, which answers `{"data": <up to 48 KB>}`. The
+  watch keeps it, so it shows at once next time. The iPhone says `{"op": "catalog-changed"}` when its library changes.
+- `{"op": "play", "source": "playlist" | "album" | "artist" | "songs", "name": "<playlist or artist name, or album id>", "track":
+  "<id>", "shuffle": true}`: the iPhone makes the list from its own library (both group the tracks the same way) and plays it from
+  that track, or shuffled.
+- `{"op": "toggle"}`, `{"op": "next"}`, `{"op": "previous"}`, `{"op": "state"}`.
+
+Each of those but the catalog's answers with what's playing: `{"track": <the track, as JSON>, "playing": true, "position": 12.5,
+"duration": 200, "at": <seconds since 1970>, "problem": "…"}`, and the cover (`"art"`, a small JPEG, with `"artFor"`, the track's
+id) when the watch hasn't got it: each message says which track's cover it has (`"art": "<id>"`). The iPhone also sends the state
+(`"op": "state"`) when the track changes or it starts or stops, while the watch app is open; the watch asks every few seconds too, and
+counts the position on in between. The crown sets the iPhone's volume.

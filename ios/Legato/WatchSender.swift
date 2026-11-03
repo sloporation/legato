@@ -30,8 +30,11 @@ final class WatchSender: NSObject {
     var waitingForWatch: Bool { sent != nil && sent != confirmed }
     private var confirmationWait: Task<Void, Never>?
 
+    /// Answers the watch when it's the iPhone's remote.
+    @ObservationIgnored var remote: WatchRemote?
+
     private let library: LibraryStore
-    private let session: WCSession? = WCSession.isSupported() ? .default : nil
+    let session: WCSession? = WCSession.isSupported() ? .default : nil
     private let defaults = UserDefaults.standard
 
     init(library: LibraryStore) {
@@ -143,6 +146,21 @@ extension WatchSender: WCSessionDelegate {
     nonisolated func sessionDidDeactivate(_ session: WCSession) { session.activate() }      // a different watch was paired
     nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
         Task { @MainActor in self.refresh() }
+    }
+
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        Task { @MainActor in self.remote?.reachabilityChanged() }
+    }
+
+    /// The watch, as a remote (WatchRemote).
+    nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        Task { @MainActor in
+            replyHandler(await self.remote?.handle(message) ?? [:])
+        }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        Task { @MainActor in _ = await self.remote?.handle(message) }
     }
 
     nonisolated func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {

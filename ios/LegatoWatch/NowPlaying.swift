@@ -2,14 +2,16 @@ import SwiftUI
 import WatchKit
 
 /// What's playing, with the controls. Legato's own rather than WatchKit's NowPlayingView: that one works out from the system whether
-/// it's playing, and shows Play while a song that has just started plays. This one asks the player. The crown is the volume, as there.
+/// it's playing, and shows Play while a song that has just started plays. This one asks the player: the watch's, or the iPhone's. The
+/// crown is the volume, as there (the iPhone's, when it's playing there).
 struct WatchNowPlaying: View {
-    @Environment(Player.self) private var player
+    let playback: any Playback
+    private var player: any Playback { playback }
 
     var body: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
-                WatchCover(path: player.current?.cover)
+                WatchCover(image: player.artwork)
                     .frame(width: 44, height: 44)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 VStack(alignment: .leading, spacing: 1) {
@@ -36,9 +38,9 @@ struct WatchNowPlaying: View {
         .padding(.horizontal, 4)
         .overlay(alignment: .topTrailing) {
             // the crown turns the volume while this is on screen (and shows its own indicator); it takes no room
-            VolumeControl().frame(width: 1, height: 1).opacity(0.01)
+            VolumeControl(origin: player.isRemote ? .companion : .local).frame(width: 1, height: 1).opacity(0.01)
         }
-        .navigationTitle("Now Playing")
+        .navigationTitle(player.isRemote ? "On iPhone" : "Now Playing")
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -54,21 +56,22 @@ struct WatchNowPlaying: View {
     }
 }
 
-/// WatchKit's volume control: the Digital Crown sets the volume of what's playing here.
+/// WatchKit's volume control: the Digital Crown sets the volume of what's playing here, or on the iPhone.
 private struct VolumeControl: WKInterfaceObjectRepresentable {
+    let origin: WKInterfaceVolumeControl.Origin
+
     func makeWKInterfaceObject(context: Context) -> WKInterfaceVolumeControl {
-        WKInterfaceVolumeControl(origin: .local)
+        WKInterfaceVolumeControl(origin: origin)
     }
     func updateWKInterfaceObject(_ control: WKInterfaceVolumeControl, context: Context) {}
 }
 
-/// A cover from the watch's Covers folder.
+/// A cover, or a note where there's none.
 private struct WatchCover: View {
-    let path: String?
-    @Environment(LibraryStore.self) private var library
+    let image: UIImage?
 
     var body: some View {
-        if let url = library.coverURL(path), let image = UIImage(contentsOfFile: url.path) {
+        if let image {
             Image(uiImage: image).resizable().scaledToFill()
         } else {
             ZStack {
