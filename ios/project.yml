@@ -9,10 +9,12 @@ options:
     watchOS: "10.0"
     macOS: "14.0"
   createIntermediateGroups: true
-# Tether: local-network pairing and encrypted sessions, shared with Liftbro. A checkout beside this one (../../tether from ios/).
+# Tether: local-network pairing and encrypted sessions, shared with Liftbro. Pinned to a commit; to work on it alongside Legato,
+# use `path: ../../tether` (a checkout beside this one) instead.
 packages:
   Tether:
-    path: ../../tether
+    url: https://github.com/sloporation/tether
+    revision: 01eb16bb4cdc30f0ec3cb37fe87b057ccd203fb5
 settings:
   base:
     SWIFT_VERSION: "5.0"
