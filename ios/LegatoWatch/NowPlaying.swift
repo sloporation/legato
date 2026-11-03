@@ -9,6 +9,21 @@ struct WatchNowPlaying: View {
     private var player: any Playback { playback }
 
     var body: some View {
+        if player.current == nil {
+            VStack(spacing: 6) {
+                Image(systemName: "music.note").font(.title2).foregroundStyle(.secondary)
+                Text("Nothing playing").font(.headline)
+                Text("Swipe right for your music.").font(.footnote).foregroundStyle(.secondary)
+            }
+            .multilineTextAlignment(.center)
+            .navigationTitle(player.isRemote ? "On iPhone" : "Now Playing")
+            .navigationBarTitleDisplayMode(.inline)
+        } else {
+            playing
+        }
+    }
+
+    private var playing: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
                 WatchCover(image: player.artwork)

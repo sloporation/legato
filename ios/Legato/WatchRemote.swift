@@ -82,7 +82,7 @@ final class WatchRemote {
 
     private var state: Remote.State {
         Remote.State(track: player.current, playing: player.isPlaying, position: player.position, duration: player.duration,
-                     problem: player.problem)
+                     problem: player.problem, upNext: Array(player.upNext.prefix(25).map { var t = $0; t.cover = nil; return t }))
     }
 
     /// Playing starts a moment after it's asked for (the audio session): answer once it has, or couldn't.

@@ -21,7 +21,7 @@ final class RemoteTests: XCTestCase {
 
     func testStateGoesThroughAMessage() {
         let state = Remote.State(track: tracks(1)[0], playing: true, position: 12.5, duration: 200, at: Date(timeIntervalSince1970: 1000),
-                                 problem: "No")
+                                 problem: "No", upNext: tracks(3))
         let back = Remote.State(message: state.message)
         XCTAssertEqual(back.track?.id, "track-0")
         XCTAssertEqual(back.track?.title, "Song 0")
@@ -29,6 +29,7 @@ final class RemoteTests: XCTestCase {
         XCTAssertEqual(back.position, 12.5)
         XCTAssertEqual(back.at, Date(timeIntervalSince1970: 1000))
         XCTAssertEqual(back.problem, "No")
+        XCTAssertEqual(back.upNext.map(\.id), ["track-0", "track-1", "track-2"])
         XCTAssertNil(Remote.State(message: Remote.State().message).track)
     }
 

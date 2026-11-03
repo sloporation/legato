@@ -41,16 +41,20 @@ enum Remote {
         var duration: Double = 0
         var at = Date.now
         var problem: String?
+        var upNext: [Track] = []        // the first few after it
 
         var message: [String: Any] {
             var m: [String: Any] = ["playing": playing, "position": position, "duration": duration, "at": at.timeIntervalSince1970]
             if let track, let data = try? JSONEncoder.remote.encode(track) { m["track"] = data }
             if let problem { m["problem"] = problem }
+            if !upNext.isEmpty, let data = try? JSONEncoder.remote.encode(upNext) { m["next"] = data }
             return m
         }
 
-        init(track: Track? = nil, playing: Bool = false, position: Double = 0, duration: Double = 0, at: Date = .now, problem: String? = nil) {
+        init(track: Track? = nil, playing: Bool = false, position: Double = 0, duration: Double = 0, at: Date = .now, problem: String? = nil,
+             upNext: [Track] = []) {
             self.track = track; self.playing = playing; self.position = position; self.duration = duration; self.at = at; self.problem = problem
+            self.upNext = upNext
         }
 
         init(message m: [String: Any]) {
@@ -60,6 +64,7 @@ enum Remote {
             duration = m["duration"] as? Double ?? 0
             at = (m["at"] as? Double).map(Date.init(timeIntervalSince1970:)) ?? .now
             problem = m["problem"] as? String
+            upNext = (m["next"] as? Data).flatMap { try? JSONDecoder.remote.decode([Track].self, from: $0) } ?? []
         }
     }
 

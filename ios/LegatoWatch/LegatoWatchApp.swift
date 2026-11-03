@@ -29,27 +29,79 @@ struct LegatoWatchApp: App {
     }
 }
 
-/// The iPhone's library while the iPhone is in reach (the watch is its remote), else the music on the watch.
+/// Three pages: Now Playing in the middle, where the app opens; the music to its left (swipe right), the iPhone's while the iPhone
+/// is in reach (the watch is its remote), else the watch's own; and Up Next to its right.
 struct WatchRootView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(Player.self) private var player
     @Environment(PhoneRemote.self) private var phone
 
+    enum Page { case music, nowPlaying, upNext }
+    @State private var page = Page.nowPlaying
+    /// The watch's own player is the one Now Playing shows (a song from On This Watch was played), though the iPhone is in reach.
+    @State private var onWatch = false
+
+    /// What Now Playing and Up Next show: the iPhone's player while it's in reach, unless the watch's own was the last played.
+    private var playback: any Playback {
+        !phone.connected || onWatch || (player.isPlaying && phone.current == nil) ? player : phone
+    }
+
     var body: some View {
-        NavigationStack {
-            if phone.connected {
-                WatchLibraryView(library: phone.library, playback: phone, phone: phone, onWatch: player, watchLibrary: library)
-            } else if phone.decided {
-                WatchLibraryView(library: library, playback: player)
-            } else {
-                ProgressView("Looking for your iPhone…")
+        if !phone.connected && !phone.decided {
+            ProgressView("Looking for your iPhone…")
+        } else {
+            TabView(selection: $page) {
+                NavigationStack {
+                    if phone.connected {
+                        WatchLibraryView(library: phone.library, playback: phone, phone: phone, onWatch: player, watchLibrary: library)
+                    } else {
+                        WatchLibraryView(library: library, playback: player)
+                    }
+                }
+                .tag(Page.music)
+                NavigationStack { WatchNowPlaying(playback: playback) }
+                    .tag(Page.nowPlaying)
+                NavigationStack { WatchUpNext(playback: playback) }
+                    .tag(Page.upNext)
             }
+            .tabViewStyle(.page)
+            .environment(\.played) { playback in
+                onWatch = playback is Player && phone.connected
+                page = .nowPlaying
+            }
+            .id(phone.connected)        // (fresh pages when it swaps)
         }
-        .id(phone.connected)        // (a fresh stack when it swaps)
     }
 }
 
-/// A library: Now Playing, then Playlists, Albums, Artists and Songs. The iPhone's (with `phone`), or the watch's own.
+extension EnvironmentValues {
+    /// Called when a song is played from a list: turns to Now Playing, showing the player it plays on.
+    @Entry var played: (any Playback) -> Void = { _ in }
+}
+
+/// What comes after the current song.
+struct WatchUpNext: View {
+    let playback: any Playback
+
+    var body: some View {
+        List {
+            if playback.upNext.isEmpty {
+                Text(playback.current == nil ? "Nothing's playing." : "Nothing's queued after this song.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(playback.upNext.prefix(50).enumerated()), id: \.offset) { _, track in
+                VStack(alignment: .leading) {
+                    Text(track.displayTitle).lineLimit(2)
+                    Text(track.artist).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+        }
+        .navigationTitle("Up Next")
+    }
+}
+
+/// A library: Playlists, Albums, Artists and Songs. The iPhone's (with `phone`), or the watch's own.
 struct WatchLibraryView: View {
     let library: LibraryStore
     let playback: any Playback
@@ -62,16 +114,6 @@ struct WatchLibraryView: View {
 
     var body: some View {
         List {
-            if let current = playback.current {
-                NavigationLink { WatchNowPlaying(playback: playback) } label: {
-                    Label { Text(current.displayTitle).lineLimit(1) } icon: { Image(systemName: "waveform") }
-                }
-            }
-            if let onWatch, onWatch.isPlaying, let current = onWatch.current {
-                NavigationLink { WatchNowPlaying(playback: onWatch) } label: {
-                    Label { Text("On Watch: \(current.displayTitle)").lineLimit(1) } icon: { Image(systemName: "applewatch") }
-                }
-            }
             if library.tracks.isEmpty {
                 if let phone {
                     if phone.loading {
@@ -135,21 +177,21 @@ struct WatchLibraryView: View {
     }
 }
 
-/// Shuffle, then the tracks: tapping one plays the list from there and opens Now Playing.
+/// Shuffle, then the tracks: tapping one plays the list from there and turns to Now Playing.
 struct WatchTrackList: View {
     let title: String
     let tracks: [Track]
     let source: Remote.Source
     let playback: any Playback
-    @State private var nowPlaying = false
+    @Environment(\.played) private var played
 
     var body: some View {
         List {
-            Button { playback.shufflePlay(tracks, source: source); nowPlaying = true } label: { Label("Shuffle", systemImage: "shuffle") }
+            Button { playback.shufflePlay(tracks, source: source); played(playback) } label: { Label("Shuffle", systemImage: "shuffle") }
             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                 Button {
                     playback.play(tracks, from: index, source: source)
-                    nowPlaying = true
+                    played(playback)
                 } label: {
                     VStack(alignment: .leading) {
                         Text(track.displayTitle).lineLimit(2)
@@ -159,6 +201,5 @@ struct WatchTrackList: View {
             }
         }
         .navigationTitle(title)
-        .navigationDestination(isPresented: $nowPlaying) { WatchNowPlaying(playback: playback) }
     }
 }

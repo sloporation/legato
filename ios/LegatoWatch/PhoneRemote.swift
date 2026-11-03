@@ -26,6 +26,7 @@ final class PhoneRemote: Playback {
     private(set) var position: Double = 0
     private(set) var duration: Double = 0
     private(set) var problem: String?
+    private(set) var upNext: [Track] = []
     private(set) var artwork: UIImage?
     var isRemote: Bool { true }
 
@@ -120,6 +121,7 @@ final class PhoneRemote: Playback {
         duration = state.duration > 0 ? state.duration : state.track?.duration ?? 0
         position = state.playing ? min(duration, state.position + Date.now.timeIntervalSince(state.at)) : state.position
         problem = state.problem
+        upNext = state.upNext
         if let data = message["art"] as? Data, let id = message["artFor"] as? String, id == current?.id {
             artwork = UIImage(data: data)
             artFor = id

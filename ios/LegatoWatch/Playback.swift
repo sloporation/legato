@@ -9,6 +9,7 @@ protocol Playback: AnyObject {
     var position: Double { get }
     var duration: Double { get }
     var problem: String? { get }
+    var upNext: [Track] { get }
     var artwork: UIImage? { get }
     /// Playing on the iPhone: the crown turns the iPhone's volume.
     var isRemote: Bool { get }
