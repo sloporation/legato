@@ -9,13 +9,16 @@ import WatchConnectivity
 @MainActor
 @Observable
 final class PhoneRemote: Playback {
-    /// Whether the iPhone is in reach: the watch is its remote. Becomes true at once; false only after a few seconds out of reach, so
-    /// a moment's lost connection doesn't swap the screens.
+    /// Whether the iPhone is in reach: the watch is its remote. Becomes true at once; false only after a while out of reach. (The
+    /// session says the iPhone isn't reachable whenever iOS suspends Legato there, which it does a few seconds after the watch last
+    /// asked it something; it's reachable again once the watch asks or iOS wakes it. That mustn't swap the screens.)
     private(set) var connected = false
     /// Whether it's known yet (just after launch, it isn't for a moment).
     private(set) var decided = false
     /// Fetching the library now.
     private(set) var loading = false
+    /// Why the library couldn't be fetched, the last time it couldn't.
+    private(set) var libraryProblem: String?
     let library: LibraryStore
 
     private(set) var current: Track?
@@ -31,6 +34,7 @@ final class PhoneRemote: Playback {
     private var leaving: Task<Void, Never>?
     private var ticking: Task<Void, Never>?
     private var active = false
+    private var wasReachable = false
     private let session = WCSession.default
 
     static var root: URL {
@@ -54,6 +58,10 @@ final class PhoneRemote: Playback {
 
     func reachabilityChanged() {
         guard session.activationState == .activated else { return }
+        if session.isReachable != wasReachable {
+            wasReachable = session.isReachable
+            NSLog("legato remote: iPhone %@", session.isReachable ? "reachable" : "not reachable")
+        }
         decided = true
         if session.isReachable {
             leaving?.cancel()
@@ -65,7 +73,7 @@ final class PhoneRemote: Playback {
             }
         } else if connected && leaving == nil {
             leaving = Task {
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(20))
                 guard !Task.isCancelled else { return }
                 if !session.isReachable { connected = false }
                 leaving = nil
@@ -123,21 +131,37 @@ final class PhoneRemote: Playback {
         if let reply = try? await ask(["op": "state"]) { show(reply) }
     }
 
-    /// Fetches the library if it changed since last time, a piece at a time.
+    /// Fetches the library if it changed since last time, a piece at a time; tries a few times, as the iPhone can be suspended
+    /// part way through.
     func fetchLibrary(force: Bool = false) async {
         guard force || !loading else { return }
         loading = true
         defer { loading = false }
+        for attempt in 1...3 {
+            do {
+                try await fetchLibraryOnce()
+                libraryProblem = nil
+                return
+            } catch {
+                NSLog("legato remote: fetching the iPhone's library, attempt %d: %@", attempt, String(describing: error))
+                libraryProblem = String(localized: "Couldn't get your iPhone's music: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func fetchLibraryOnce() async throws {
         do {
             var request: [String: Any] = ["op": "catalog"]
             if version != nil, !library.tracks.isEmpty { request["have"] = version }
             let answer = try await ask(request)
-            guard let latest = answer["version"] as? String, let pieces = answer["pieces"] as? Int else { return }
+            guard let latest = answer["version"] as? String, let pieces = answer["pieces"] as? Int else {
+                throw Failure(answer["error"] as? String ?? String(localized: "Legato on the iPhone didn't answer."))
+            }
             if pieces == 0 { return }       // (the same as here)
             var data = Data()
             for i in 0..<pieces {
                 let reply = try await ask(["op": "piece", "version": latest, "index": i])
-                guard let piece = reply["data"] as? Data else { return }       // it changed meanwhile: it says so, and this runs again
+                guard let piece = reply["data"] as? Data else { throw Failure(String(localized: "It changed while being sent.")) }
                 data.append(piece)
             }
             let manifest = try Remote.Catalog.manifest(from: data)
@@ -145,9 +169,12 @@ final class PhoneRemote: Playback {
             try manifest.encoded().write(to: library.manifestURL, options: .atomic)
             version = latest
             library.reload(force: true)
-        } catch {
-            NSLog("legato: couldn't fetch the iPhone's library: %@", error.localizedDescription)
         }
+    }
+
+    private struct Failure: LocalizedError {
+        var errorDescription: String?
+        init(_ why: String) { errorDescription = why }
     }
 
     // MARK: telling the iPhone
@@ -184,14 +211,65 @@ final class PhoneRemote: Playback {
         }
     }
 
-    /// Sends a message to the iPhone (waking Legato there if it isn't running) and waits for its answer. Each says which track's
-    /// cover the watch has, so the answer brings the cover only when it's needed.
+    /// Sends a message to the iPhone and waits for its answer. Each says which track's cover the watch has, so the answer brings the
+    /// cover only when it's needed. Sending wakes Legato on the iPhone if iOS has suspended it; if the session says the iPhone can't
+    /// be reached just then, it tries again a moment later, and it gives up on an answer that doesn't come.
     private func ask(_ message: [String: Any]) async throws -> [String: Any] {
         var message = message
         if let artFor { message["art"] = artFor }
-        return try await withCheckedThrowingContinuation { continuation in
-            session.sendMessage(message, replyHandler: { continuation.resume(returning: $0) },
-                                errorHandler: { continuation.resume(throwing: $0) })
+        let op = message["op"] as? String ?? ""
+        var attempt = 1
+        while true {
+            do {
+                return try await send(message)
+            } catch let error as WCError where error.code == .notReachable && attempt < 4 {
+                attempt += 1
+                try await Task.sleep(for: .seconds(1.5))
+            } catch {
+                NSLog("legato remote: %@ failed: %@", op, String(describing: error))
+                throw error
+            }
         }
+    }
+
+    private func send(_ message: [String: Any]) async throws -> [String: Any] {
+        let answer = Answer()
+        let timeout = Task {
+            try await Task.sleep(for: .seconds(10))
+            answer.finish(.failure(Failure(String(localized: "Legato on the iPhone didn't answer."))))
+        }
+        defer { timeout.cancel() }
+        return try await withCheckedThrowingContinuation { continuation in
+            answer.start(continuation)
+            session.sendMessage(message, replyHandler: { answer.finish(.success($0)) },
+                                errorHandler: { answer.finish(.failure($0)) })
+        }
+    }
+}
+
+/// An answer from the iPhone, or the reason there isn't one: whichever comes first.
+private final class Answer: @unchecked Sendable {
+    private var continuation: CheckedContinuation<[String: Any], Error>?
+    private var early: Result<[String: Any], Error>?
+    private let lock = NSLock()
+
+    func start(_ c: CheckedContinuation<[String: Any], Error>) {
+        lock.lock()
+        if let early {
+            lock.unlock()
+            c.resume(with: early)
+            return
+        }
+        continuation = c
+        lock.unlock()
+    }
+
+    func finish(_ result: Result<[String: Any], Error>) {
+        lock.lock()
+        let c = continuation
+        continuation = nil
+        if c == nil && early == nil { early = result }
+        lock.unlock()
+        c?.resume(with: result)
     }
 }

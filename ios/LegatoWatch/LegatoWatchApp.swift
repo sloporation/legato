@@ -73,6 +73,9 @@ struct WatchLibraryView: View {
                 if let phone {
                     if phone.loading {
                         HStack { ProgressView().frame(width: 20); Text("Getting your iPhone's music…").font(.footnote) }
+                    } else if let problem = phone.libraryProblem {
+                        Text(problem).font(.footnote).foregroundStyle(.secondary)
+                        Button("Try Again") { Task { await phone.fetchLibrary() } }
                     } else {
                         Text("There's no music in Legato on your iPhone yet.")
                             .font(.footnote)

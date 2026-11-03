@@ -14,6 +14,8 @@ final class WatchRemote {
     /// the library as last sent: the watch fetches it a piece at a time
     private var catalog: Remote.Catalog?
     private var lastPushed: Remote.State?
+    private var awake: UIBackgroundTaskIdentifier = .invalid
+    private var sleeping: Task<Void, Never>?
 
     init(library: LibraryStore, player: Player, session: WCSession?) {
         self.library = library
@@ -25,6 +27,7 @@ final class WatchRemote {
 
     /// A message from the watch, and the answer to it.
     func handle(_ message: [String: Any]) async -> [String: Any] {
+        stayAwake()
         switch message["op"] as? String {
         case "catalog":
             library.reload()
@@ -102,6 +105,27 @@ final class WatchRemote {
             image.draw(in: CGRect(x: (side - size.width) / 2, y: (side - size.height) / 2, width: size.width, height: size.height))
         }
         return small.jpegData(compressionQuality: 0.7)
+    }
+
+    /// Keeps the app running in the background for a while after each message: the watch asks every few seconds while it's open,
+    /// and iOS would otherwise suspend the app a few seconds after each answer, which the watch sees as the iPhone going away.
+    private func stayAwake() {
+        if awake == .invalid {
+            awake = UIApplication.shared.beginBackgroundTask(withName: "Watch remote") { [weak self] in
+                MainActor.assumeIsolated { self?.letSleep() }
+            }
+        }
+        sleeping?.cancel()
+        sleeping = Task {
+            try? await Task.sleep(for: .seconds(20))
+            if !Task.isCancelled { letSleep() }
+        }
+    }
+
+    private func letSleep() {
+        guard awake != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(awake)
+        awake = .invalid
     }
 
     // MARK: telling the watch
