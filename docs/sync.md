@@ -1,8 +1,9 @@
 # Syncing music to the phone and the watch
 
-Legato Desktop puts the music you choose onto Legato for iPhone over USB. Legato for iPhone puts the music you choose from that onto
-Legato for Apple Watch. There is no server and no network: the desktop writes files into the phone app's Documents folder, the way
-Finder's file sharing does, and the phone hands files to the watch with WatchConnectivity.
+Legato Desktop puts the music you choose onto Legato for iPhone over USB. Legato for Mac does the same over Wi-Fi. Legato for iPhone
+puts the music you choose from that onto Legato for Apple Watch. Over USB there is no server and no network: the desktop writes files
+into the phone app's Documents folder, the way Finder's file sharing does, and the phone hands files to the watch with
+WatchConnectivity.
 
 ## Desktop → iPhone (USB)
 
@@ -34,6 +35,36 @@ the iPhone, anything but MP3, AAC/ALAC, WAV, AIFF and FLAC (so Opus, Ogg Vorbis 
 ExoPlayer doesn't take (WMA, APE, WavPack and the like). The converted file keeps the original's `id`, `size` and `modified` in the
 manifest, so it is only converted again when the original changes. Without ffmpeg, those files are left off. Covers are named after a hash of the JPEG, so a changed cover arrives as a new
 file. On Linux, iPhones need the `usbmuxd` service running. Windows can't sync yet.
+
+## Legato for Mac → iPhone (Wi-Fi)
+
+Legato for Mac is sandboxed for the Mac App Store, which rules out usbmuxd, so it syncs over the local network instead. The phone ends
+up with the same `Legato/` folder, kept the same way, so it doesn't matter which app last synced it (both name tracks by the same hash
+of the file's path).
+
+Finding, pairing and connecting are [Tether](https://github.com/sloporation/tether)'s, which Liftbro uses too (its README has the
+details). The Mac advertises `_legato._tcp` with Bonjour; Sync with Mac on the phone finds it. The first time, the phone pairs: a
+Curve25519 key agreement, with the phone committing to its half first, gives both the same key and the same six-digit code, which the
+Mac shows with "“iPhone” wants to sync with this Mac"; the person checks it and allows the phone. After that they connect over TLS 1.2
+with that key (`TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256`), and the phone proves which phone it is. Both keep the keys in the
+Keychain. If the Mac has forgotten the phone, the phone is told so and pairs again. Tether's configuration (`ios/Sync/SyncWire.swift`)
+has the label `legato`.
+
+Over that connection, each message is a 4-byte big-endian length and that much JSON; a reply that says `size` is followed by that many
+bytes of a file. The phone asks and the Mac answers:
+
+1. `{"op": "hello", "chosen": {…}, "batch": "…", "changes": […]}`. The Mac makes the playlist changes, then answers with the manifest
+   of what the phone is to have (`{"ok": true, "manifest": {…}}`), its files named `Music/<id>.<ext>` and `Covers/<hash>.jpg`.
+2. `{"op": "file", "path": "Music/<id>.flac"}` for each file the phone hasn't got (by `id`, `size` and `modified`, as over USB), and
+   each cover. The phone writes it as `.part` and renames it into place.
+3. The phone writes the manifest, deletes what it no longer names, and says `{"op": "done"}`; the Mac answers once it has noted it.
+
+(Byte strings are base64 in the JSON.)
+
+What a phone gets is chosen on the Mac, under Phones (everything, or playlists, artists and albums), starting from the manifest's
+`chosen` the first time. Playlist changes go as over USB, except that the phone sends them: `changes.json` goes onto the end of
+`changes.applying.json`, which has a `batch` name; the Mac remembers how many of a batch it has made, so a sync that didn't finish
+never makes one twice. The phone deletes `changes.applying.json` once it has the new manifest.
 
 ## Desktop → Android (USB)
 
@@ -128,3 +159,25 @@ The iPhone app keeps its own choice of playlists, albums and artists for the wat
 The watch keeps the files under its own `Documents/Legato/`, writes the manifest there, and deletes the files the manifest no longer
 names. Transfers continue in the background and may arrive in any order, so the watch only shows tracks whose file has arrived. The
 watch tells the phone what it has (`transferUserInfo`, `{"have": [ids]}`) so nothing is sent twice.
+
+## The watch as a remote
+
+While the iPhone is in reach (`WCSession.isReachable`), Legato on the watch is a remote for Legato on the iPhone: it shows the iPhone's
+library, and what it chooses plays on the iPhone, through whatever the iPhone plays through (headphones go with the iPhone while it's
+near). Out of reach for more than a few seconds, the watch shows and plays the music synced to it, as above. The two talk with
+`sendMessage`, which wakes the iPhone app if it isn't running; every message from the watch gets an answer.
+
+- `{"op": "catalog", "have": "<version>"}`: the iPhone's library, as a manifest of its tracks (without covers) and playlists, JSON
+  compressed with LZFSE. The answer is `{"version": "<hash of it>", "pieces": n}`, with `n` 0 when the watch has that version
+  already; the watch then asks `{"op": "piece", "version": …, "index": i}` for each, which answers `{"data": <up to 48 KB>}`. The
+  watch keeps it, so it shows at once next time. The iPhone says `{"op": "catalog-changed"}` when its library changes.
+- `{"op": "play", "source": "playlist" | "album" | "artist" | "songs", "name": "<playlist or artist name, or album id>", "track":
+  "<id>", "shuffle": true}`: the iPhone makes the list from its own library (both group the tracks the same way) and plays it from
+  that track, or shuffled.
+- `{"op": "toggle"}`, `{"op": "next"}`, `{"op": "previous"}`, `{"op": "state"}`.
+
+Each of those but the catalog's answers with what's playing: `{"track": <the track, as JSON>, "playing": true, "position": 12.5,
+"duration": 200, "at": <seconds since 1970>, "problem": "…"}`, and the cover (`"art"`, a small JPEG, with `"artFor"`, the track's
+id) when the watch hasn't got it: each message says which track's cover it has (`"art": "<id>"`). The iPhone also sends the state
+(`"op": "state"`) when the track changes or it starts or stops, while the watch app is open; the watch asks every few seconds too, and
+counts the position on in between. The crown sets the iPhone's volume.

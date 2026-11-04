@@ -16,6 +16,11 @@ struct PlaylistChange: Codable, Equatable {
 struct ChangeLog: Codable {
     var version = 1
     var changes: [PlaylistChange] = []
+    /// changes.applying.json, on its way to Legato for Mac over Wi-Fi: names this lot, so the Mac makes them only once however many
+    /// times a sync that didn't finish sends them
+    var batch: String?
+    /// (Legato Desktop's, over USB: how many of them it has made)
+    var applied: Int?
 
     static func read(_ url: URL) -> [PlaylistChange] {
         guard let data = try? Data(contentsOf: url) else { return [] }

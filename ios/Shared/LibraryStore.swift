@@ -6,7 +6,7 @@ import Observation
 /// changed here: the changes go into `changes.json` for the desktop to take (docs/sync.md), and the playlists show them made.
 @MainActor
 @Observable
-final class LibraryStore {
+final class LibraryStore: TrackFiles {
     private(set) var tracks: [Track] = []
     private(set) var playlists: [Playlist] = []
     private(set) var albums: [Album] = []
@@ -16,6 +16,8 @@ final class LibraryStore {
     private(set) var problem: String?
 
     let root: URL
+    /// Leave out tracks whose file isn't here. (The iPhone's library as the watch browses it has no files.)
+    private let requireFiles: Bool
     private var byId: [String: Track] = [:]
     private var lastLoaded: [Date?] = []
 
@@ -27,8 +29,9 @@ final class LibraryStore {
     /// changes the desktop is taking, in a sync now or one that didn't finish
     var applyingURL: URL { root.appending(path: "changes.applying.json") }
 
-    init(root: URL = LibraryStore.defaultRoot) {
+    init(root: URL = LibraryStore.defaultRoot, requireFiles: Bool = true) {
         self.root = root
+        self.requireFiles = requireFiles
         reload()
     }
 
@@ -55,7 +58,7 @@ final class LibraryStore {
         manifest = m
         self.problem = problem
         let fm = FileManager.default
-        tracks = m.tracks.filter { fm.fileExists(atPath: url(for: $0).path) }
+        tracks = requireFiles ? m.tracks.filter { fm.fileExists(atPath: url(for: $0).path) } : m.tracks
         byId = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         showPlaylists()
         albums = Grouping.albums(tracks)

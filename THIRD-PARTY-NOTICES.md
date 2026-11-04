@@ -56,3 +56,12 @@ can't play.
 ## Legato for iPhone and Apple Watch
 
 Built only on Apple's frameworks; no third-party code.
+
+## Legato for Mac
+
+| Software | Used for | License |
+|---|---|---|
+| [TagLib](https://taglib.org/) | reading and writing tags | MPL-1.1 (of its two licenses, LGPL-2.1 or MPL-1.1), linked statically |
+| [zlib](https://zlib.net/), as macOS ships it | compressed ID3v2 frames, for TagLib | Zlib |
+
+TagLib's source is at the link above; `ios/TagLib/build.sh` names the exact version and checksum.

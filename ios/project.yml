@@ -1,4 +1,4 @@
-# Legato for iPhone and Apple Watch. Generate the Xcode project with `xcodegen` (brew install xcodegen) in this folder; the .xcodeproj
+# Legato for iPhone, Apple Watch and Mac. Generate the Xcode project with `xcodegen` (brew install xcodegen) in this folder; the .xcodeproj
 # is not kept in git. DEVELOPMENT_TEAM is the team the App Store builds are signed for: to build to your own devices with another
 # team, override it (xcodebuild DEVELOPMENT_TEAM=…, or Xcode's Signing & Capabilities).
 name: Legato
@@ -7,7 +7,14 @@ options:
   deploymentTarget:
     iOS: "17.0"
     watchOS: "10.0"
+    macOS: "14.0"
   createIntermediateGroups: true
+# Tether: local-network pairing and encrypted sessions, shared with Liftbro. Pinned to a commit; to work on it alongside Legato,
+# use `path: ../../tether` (a checkout beside this one) instead.
+packages:
+  Tether:
+    url: https://github.com/sloporation/tether
+    revision: 01eb16bb4cdc30f0ec3cb37fe87b057ccd203fb5
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -20,7 +27,7 @@ targets:
   Legato:
     type: application
     platform: iOS
-    sources: [Legato, Shared]
+    sources: [Legato, Shared, Sync]
     info:
       path: Legato/Info.plist
       properties:
@@ -37,6 +44,9 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         # Legato Desktop writes the synced music into Documents over USB (house_arrest), as Finder's file sharing does
         UIFileSharingEnabled: true
+        # Legato for Mac syncs over Wi-Fi instead: the phone finds it with Bonjour (Tether, Sync/SyncWire.swift)
+        NSLocalNetworkUsageDescription: Legato finds Legato on your Mac on this network, to sync your music from it.
+        NSBonjourServices: [_legato._tcp]
         LSSupportsOpeningDocumentsInPlace: false
         # music keeps playing with the app in the background
         UIBackgroundModes: [audio]
@@ -52,6 +62,7 @@ targets:
         "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Legato/CarPlay.entitlements
     dependencies:
       - target: LegatoWatch
+      - package: Tether
 
   LegatoWatch:
     type: application
@@ -69,6 +80,79 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sloporation.legato.watchkitapp
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  # Legato for Mac: the music folders' library, native, for the Mac App Store (the Qt app stays for the dmg, Linux and Windows). Same
+  # bundle ID as the iPhone app, so one purchase covers both (a universal purchase).
+  LegatoMac:
+    type: application
+    platform: macOS
+    sources:
+      - LegatoMac
+      - Shared
+      - Sync
+      - path: ../qt/icons/legato.icns
+        buildPhase: resources
+    dependencies:
+      - package: Tether
+    preBuildScripts:
+      - name: TagLib
+        script: '"$SRCROOT/TagLib/build.sh"'
+        basedOnDependencyAnalysis: false
+    info:
+      path: LegatoMac/Info.plist
+      properties:
+        CFBundleDisplayName: Legato
+        CFBundleIconFile: legato
+        LSApplicationCategoryType: public.app-category.music
+        ITSAppUsesNonExemptEncryption: false
+        # phones find it with Bonjour; macOS asks once before it can be found
+        NSLocalNetworkUsageDescription: Legato lets Legato on your iPhone find this Mac, to sync music to it.
+        NSBonjourServices: [_legato._tcp]
+    entitlements:
+      path: LegatoMac/LegatoMac.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        # the music folders, chosen in the open panel and kept as security-scoped bookmarks: read-write, for tags and playlists
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.files.bookmarks.app-scope: true
+        # phones sync from it over Wi-Fi (Tether, Sync/SyncWire.swift)
+        com.apple.security.network.server: true
+        # Tether keeps the phones' pairing keys in the data protection keychain, so they survive rebuilds and updates
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.sloporation.legato"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sloporation.legato
+        PRODUCT_NAME: Legato
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO     # (TagLib/build.sh downloads and builds into TagLib/out)
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/TagLib/out/include/TagLibC
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/TagLib/out/lib
+
+  # the Mac app's code, tested without the app (not sandboxed, so the tests can make folders and connect to their own server)
+  LegatoMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - LegatoMacTests
+      - path: LegatoMac
+        excludes: [LegatoMacApp.swift, Info.plist, "*.entitlements", "*.xcprivacy"]
+      - Shared
+      - Sync
+      - path: LegatoTests/Fixtures
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: Tether
+    preBuildScripts:
+      - name: TagLib
+        script: '"$SRCROOT/TagLib/build.sh"'
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/TagLib/out/include/TagLibC
+        LIBRARY_SEARCH_PATHS: $(SRCROOT)/TagLib/out/lib
 
   LegatoTests:
     type: bundle.unit-test
@@ -92,3 +176,10 @@ schemes:
     build:
       targets:
         LegatoWatch: all
+  LegatoMac:
+    build:
+      targets:
+        LegatoMac: all
+        LegatoMacTests: [test]
+    test:
+      targets: [LegatoMacTests]

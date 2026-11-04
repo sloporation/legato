@@ -22,9 +22,19 @@ final class WatchSender: NSObject {
     private(set) var selection: Set<Item> = [] { didSet { save() } }
     /// Track ids the watch says it has.
     private(set) var onWatch: Set<String> = [] { didSet { save() } }
+    /// The last sync sent (its manifest's id), and whether the watch has said it got it. The files can all go and still not arrive,
+    /// so this waits for the watch's word; `unconfirmed` once it has waited long enough after the last file went.
+    private(set) var sent: String?
+    private(set) var confirmed: String?
+    private(set) var unconfirmed = false
+    var waitingForWatch: Bool { sent != nil && sent != confirmed }
+    private var confirmationWait: Task<Void, Never>?
+
+    /// Answers the watch when it's the iPhone's remote.
+    @ObservationIgnored var remote: WatchRemote?
 
     private let library: LibraryStore
-    private let session: WCSession? = WCSession.isSupported() ? .default : nil
+    let session: WCSession? = WCSession.isSupported() ? .default : nil
     private let defaults = UserDefaults.standard
 
     init(library: LibraryStore) {
@@ -97,9 +107,16 @@ final class WatchSender: NSObject {
         }
         let manifest = Manifest(generated: .now, source: String(localized: "Legato on iPhone"), tracks: tracks, playlists: playlists)
         do {
-            let url = FileManager.default.temporaryDirectory.appending(path: "watch-manifest-\(UUID().uuidString).json")
+            let id = UUID().uuidString
+            let url = FileManager.default.temporaryDirectory.appending(path: "watch-manifest-\(id).json")
             try manifest.encoded().write(to: url)
-            session.transferFile(url, metadata: ["kind": "manifest"])
+            session.transferFile(url, metadata: ["kind": "manifest", "id": id])
+            NSLog("legato watch sync: %d tracks chosen, %d waiting to go (the manifest last), %d the watch has", tracks.count,
+                  session.outstandingFileTransfers.count, onWatch.count)
+            sent = id
+            unconfirmed = false
+            confirmationWait?.cancel()
+            confirmationWait = nil
         } catch {
             problem = error.localizedDescription
         }
@@ -111,6 +128,15 @@ final class WatchSender: NSObject {
         isPaired = session.isPaired
         isAppInstalled = session.isWatchAppInstalled
         pendingTransfers = session.outstandingFileTransfers.filter { $0.isTransferring || !$0.progress.isFinished }.count
+        // everything has gone: give the watch a while to say it has it
+        if waitingForWatch && pendingTransfers == 0 && confirmationWait == nil && !unconfirmed {
+            confirmationWait = Task {
+                try? await Task.sleep(for: .seconds(45))
+                guard !Task.isCancelled else { return }
+                if self.waitingForWatch { self.unconfirmed = true }
+                self.confirmationWait = nil
+            }
+        }
     }
 }
 
@@ -124,21 +150,44 @@ extension WatchSender: WCSessionDelegate {
         Task { @MainActor in self.refresh() }
     }
 
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        Task { @MainActor in self.remote?.reachabilityChanged() }
+    }
+
+    /// The watch, as a remote (WatchRemote).
+    nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        Task { @MainActor in
+            replyHandler(await self.remote?.handle(message) ?? [:])
+        }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        Task { @MainActor in _ = await self.remote?.handle(message) }
+    }
+
     nonisolated func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
         // (manifests are cancelled on purpose when a newer one replaces them)
         let replaced = fileTransfer.file.metadata?["kind"] as? String == "manifest"
         let message = error?.localizedDescription
+        NSLog("legato watch sync: sent %@ %@: %@", fileTransfer.file.metadata?["kind"] as? String ?? "?",
+              fileTransfer.file.fileURL.lastPathComponent, error.map { String(describing: $0) } ?? "ok")
         Task { @MainActor in
             if let message, !replaced { self.problem = message }
             self.refresh()
         }
     }
 
-    /// The watch says what it has: `{"have": [track ids]}`.
+    /// The watch says what it has: `{"have": [track ids], "manifest": "<the id of the last sync it got>"}`.
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         guard let have = userInfo["have"] as? [String] else { return }
+        NSLog("legato watch sync: the watch has %d tracks, manifest %@", have.count, userInfo["manifest"] as? String ?? "none")
+        let manifest = userInfo["manifest"] as? String
         Task { @MainActor in
             self.onWatch = Set(have)
+            if let manifest {
+                self.confirmed = manifest
+                if manifest == self.sent { self.unconfirmed = false }
+            }
             self.refresh()
         }
     }

@@ -4,6 +4,12 @@ import SwiftUI
 struct WatchView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(WatchSender.self) private var watch
+    @State private var search = ""
+
+    /// Every word typed has to be in the name or the detail (case and accents aside).
+    private func matches(_ texts: String...) -> Bool {
+        search.split(whereSeparator: \.isWhitespace).allSatisfy { word in texts.contains { $0.localizedStandardContains(word) } }
+    }
 
     var body: some View {
         List {
@@ -19,29 +25,61 @@ struct WatchView: View {
                     .disabled(watch.selection.isEmpty && watch.onWatch.isEmpty)
                 }
                 if let problem = watch.problem { Text(problem).foregroundStyle(.red).font(.callout) }
+                if (watch.waitingForWatch || watch.pendingTransfers > 0) && !watch.unconfirmed
+                    && watch.syncedCount < watch.wantedTracks.count {
+                    // the watch says what it has after each song, so this moves as they arrive (and songs still on their way after
+                    // the app was closed show here too)
+                    ProgressView(value: Double(watch.syncedCount), total: Double(max(watch.wantedTracks.count, 1))) {
+                        Text("On the watch: \(watch.syncedCount) of \(watch.wantedTracks.count) songs")
+                    } currentValueLabel: {
+                        Text("Songs take a while each. Keep the watch near the iPhone; it carries on in the background.")
+                    }
+                } else if watch.waitingForWatch && watch.pendingTransfers == 0 {
+                    if watch.unconfirmed {
+                        Label("The watch hasn't said it got this sync. Open Legato on the watch, keep it near the iPhone, and sync again.",
+                              systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange).font(.callout)
+                    } else {
+                        Label("Sent. Waiting for the watch to say it has it…", systemImage: "hourglass")
+                            .foregroundStyle(.secondary).font(.callout)
+                    }
+                }
             } footer: {
                 Text("\(watch.wantedTracks.count) songs chosen (\(ByteCountFormatter.string(fromByteCount: watch.wantedSize, countStyle: .file))), \(watch.syncedCount) on the watch. Music on the watch plays through Bluetooth headphones.")
             }
 
-            if !library.playlists.isEmpty {
+            let playlists = library.playlists.filter { matches($0.name) }
+            let albums = library.albums.filter { matches($0.title, $0.artist) }
+            let artists = library.artists.filter { matches($0.name) }
+            if !playlists.isEmpty {
                 Section("Playlists") {
-                    ForEach(library.playlists) { p in
+                    ForEach(playlists) { p in
                         row(p.name, detail: "\(library.tracks(of: p).count) songs", item: .playlist(p.name))
                     }
                 }
             }
-            Section("Albums") {
-                ForEach(library.albums) { a in
-                    row(a.title, detail: a.artist, item: .album(a.id), cover: a.cover)
+            if !albums.isEmpty {
+                Section("Albums") {
+                    ForEach(albums) { a in
+                        row(a.title, detail: a.artist, item: .album(a.id), cover: a.cover)
+                    }
                 }
             }
-            Section("Artists") {
-                ForEach(library.artists) { a in
-                    row(a.name, detail: "\(a.tracks.count) songs", item: .artist(a.name.lowercased()))
+            if !artists.isEmpty {
+                Section("Artists") {
+                    ForEach(artists) { a in
+                        row(a.name, detail: "\(a.tracks.count) songs", item: .artist(a.name.lowercased()))
+                    }
+                }
+            }
+            if !search.isEmpty && playlists.isEmpty && albums.isEmpty && artists.isEmpty && !library.tracks.isEmpty {
+                Section {
+                    Text("No playlists, albums or artists match “\(search)”.").foregroundStyle(.secondary)
                 }
             }
         }
         .navigationTitle("Watch Sync")
+        .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Playlists, albums and artists")
         .overlay {
             if library.tracks.isEmpty {
                 ContentUnavailableView("No Music Yet", systemImage: "applewatch",
