@@ -32,6 +32,15 @@ final class PlaylistFileTests: XCTestCase {
         XCTAssertEqual(p.ids, ["A", "B"])
     }
 
+    func testKeepsSpacesAtTheStartOfANameAndStillReadsIndentedLines() {
+        let ids = ["/Music/Lists/ 00s/d.mp3": "D", "/Music/Lists/a.mp3": "A"]
+        var p = PlaylistFile(text: " 00s/d.mp3\n  a.mp3\n", dir: dir) { ids[$0] }
+        XCTAssertEqual(p.ids, ["D", "A"])
+        XCTAssertFalse(p.add(id: "D", path: "/Music/Lists/ 00s/d.mp3", dir: dir))     // already in
+        p = PlaylistFile(text: p.text, dir: dir) { ids[$0] }
+        XCTAssertEqual(p.ids, ["D", "A"])
+    }
+
     func testLineIsRelativeOnlyInsideTheFolder() {
         XCTAssertEqual(PlaylistFile.line(for: "/Music/Lists/sub/c.m4a", in: dir), "sub/c.m4a")
         XCTAssertEqual(PlaylistFile.line(for: "/Music/b.flac", in: dir), "/Music/b.flac")

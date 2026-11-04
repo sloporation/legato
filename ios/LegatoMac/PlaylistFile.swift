@@ -23,13 +23,16 @@ struct PlaylistFile: Equatable {
         header = []
         var pending: [String] = []
         for raw in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
-            let line = String(raw).trimmingCharacters(in: .whitespaces)
-            if line.isEmpty { continue }
-            if line.hasPrefix("#") {
-                if entries.isEmpty && !line.hasPrefix("#EXTINF") { header.append(line) } else { pending.append(line) }
+            let trimmed = String(raw).trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("#") {
+                if entries.isEmpty && !trimmed.hasPrefix("#EXTINF") { header.append(trimmed) } else { pending.append(trimmed) }
                 continue
             }
-            entries.append(Entry(comments: pending, line: line, id: idOf(Self.path(of: line, in: dir))))
+            // (a file or folder's name can start or end with a space: the line as written first, then trimmed)
+            let line = String(raw)
+            let id = idOf(Self.path(of: line, in: dir)) ?? idOf(Self.path(of: trimmed, in: dir))
+            entries.append(Entry(comments: pending, line: line, id: id))
             pending = []
         }
         trailer = pending
