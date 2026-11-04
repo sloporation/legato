@@ -1,73 +1,40 @@
-import CryptoKit
 import Foundation
-import Network
+import Tether
 
 /// The phone's side of a sync with Legato for Mac: it says hello (with its playlist changes), the Mac answers with the manifest of
 /// what the phone is to have, and the phone fetches the files it hasn't got, writes the manifest last, and deletes what is no longer
 /// wanted. The same Legato/ folder as a sync from Legato Desktop over USB, kept the same way (docs/sync.md).
 struct SyncClient {
-    /// Who the phone is, to the Mac.
-    struct Identity: Codable {
-        var phone: String
-        var name: String
-    }
-
     enum Outcome: Equatable {
         case synced(copied: Int, removed: Int)
     }
 
     enum Failure: LocalizedError {
-        case refused(String), unpaired, space(Int64)
+        case refused(String), space(Int64)
         var errorDescription: String? {
             switch self {
             case .refused(let why): why
-            case .unpaired: String(localized: "This Mac doesn't know this iPhone.")
             case .space(let needed): String(localized: "Not enough space on the phone: this needs \(needed / 1_000_000) MB more")
             }
         }
     }
 
     let root: URL                           // Documents/Legato
-    let identity: Identity
-    let key: SymmetricKey                   // agreed with this Mac when the phone was paired
     var progress: @Sendable (_ done: Int64, _ total: Int64, _ what: String) -> Void = { _, _, _ in }
 
     private var manifestURL: URL { root.appending(path: "manifest.json") }
     private var changesURL: URL { root.appending(path: "changes.json") }
     private var applyingURL: URL { root.appending(path: "changes.applying.json") }
 
-    /// Pairs with a Mac, over a connection made with `Wire.pairingParameters()`: `code` is called with the code to show, which the
-    /// Mac shows too, and this returns once the Mac has allowed the phone, with the Mac's id and the key for syncing with it.
-    static func pair(_ wire: WireConnection, as identity: Identity, code: @Sendable (String) -> Void) async throws -> (mac: String, key: SymmetricKey) {
-        _ = try await wire.receive(Wire.Reply.self)        // (the challenge, which pairing has no use for)
-        let mine = Curve25519.KeyAgreement.PrivateKey()
-        let phoneKey = mine.publicKey.rawRepresentation
-        try await wire.send(Wire.Request(op: .pair, phone: identity.phone, name: identity.name, commitment: Pairing.commitment(to: phoneKey)))
-        let theirs = try await wire.receive(Wire.Reply.self)
-        guard theirs.ok, let mac = theirs.mac, let macKey = theirs.key else { throw Failure.refused(theirs.why ?? String(localized: "The Mac said no.")) }
-        let agreed = try Pairing.agree(mine, with: macKey, phoneKey: phoneKey, macKey: macKey)
-        try await wire.send(Wire.Request(op: .pair, key: phoneKey))
-        let asking = try await wire.receive(Wire.Reply.self)
-        guard asking.ok else { throw Failure.refused(asking.why ?? String(localized: "The Mac said no.")) }
-        code(agreed.code)
-        let answer = try await wire.receive(Wire.Reply.self)
-        guard answer.ok else { throw Failure.refused(answer.why ?? String(localized: "The Mac didn't allow this iPhone.")) }
-        return (mac, agreed.key)
-    }
-
-    /// Syncs, over a connection made with `Wire.phoneParameters` and this phone's key.
-    func sync(_ wire: WireConnection) async throws -> Outcome {
+    /// Syncs, over a session Tether has opened with the Mac.
+    func sync(_ session: TetherSession) async throws -> Outcome {
         let fm = FileManager.default
         for dir in ["Music", "Covers"] { try fm.createDirectory(at: root.appending(path: dir), withIntermediateDirectories: true) }
         let old = (try? Data(contentsOf: manifestURL)).flatMap { try? Manifest.decode($0) }
         let pending = try takeChanges()
 
-        let challenge = try await wire.receive(Wire.Reply.self).challenge ?? Data()
-        try await wire.send(Wire.Request(op: .hello, phone: identity.phone, name: identity.name,
-                                         proof: Pairing.proof(challenge: challenge, phone: identity.phone, key: key),
-                                         chosen: old?.chosen, batch: pending.batch, changes: pending.changes))
-        let hello = try await wire.receive(Wire.Reply.self)
-        if hello.unpaired == true { throw Failure.unpaired }
+        try await session.send(SyncWire.Request(op: .hello, chosen: old?.chosen, batch: pending.batch, changes: pending.changes))
+        let hello = try await session.receive(SyncWire.Reply.self)
         guard hello.ok, let manifest = hello.manifest else { throw Failure.refused(hello.why ?? String(localized: "The Mac said no.")) }
 
         let have = Set((try? fm.contentsOfDirectory(atPath: root.appending(path: "Music").path)) ?? [])
@@ -84,14 +51,14 @@ struct SyncClient {
         var done: Int64 = 0
         for track in plan.fetch {
             let start = done
-            try await fetch(track.file, over: wire) { got in progress(start + got, plan.bytes, track.displayTitle) }
+            try await fetch(track.file, over: session) { got in progress(start + got, plan.bytes, track.displayTitle) }
             done = start + track.size
         }
         let haveCovers = Set((try? fm.contentsOfDirectory(atPath: root.appending(path: "Covers").path)) ?? [])
         let covers = Set(manifest.tracks.compactMap(\.cover))
         for cover in covers.sorted() where !haveCovers.contains((cover as NSString).lastPathComponent) {
             progress(plan.bytes, plan.bytes, String(localized: "Covers"))
-            try? await fetch(cover, over: wire)       // no cover is better than no sync
+            try? await fetch(cover, over: session)       // no cover is better than no sync
         }
 
         // the manifest, last; then what it no longer names
@@ -101,18 +68,18 @@ struct SyncClient {
         let wantedCovers = Set(covers.map { ($0 as NSString).lastPathComponent })
         for name in haveCovers where !wantedCovers.contains(name) { try? fm.removeItem(at: root.appending(path: "Covers/" + name)) }
 
-        try await wire.send(Wire.Request(op: .done, copied: plan.fetch.count))
-        _ = try? await wire.receive(Wire.Reply.self)     // (the Mac has noted it)
+        try await session.send(SyncWire.Request(op: .done, copied: plan.fetch.count))
+        _ = try? await session.receive(SyncWire.Reply.self)     // (the Mac has noted it)
         return .synced(copied: plan.fetch.count, removed: plan.remove.filter { !$0.hasSuffix(".part") }.count)
     }
 
-    private func fetch(_ path: String, over wire: WireConnection, progress: (Int64) -> Void = { _ in }) async throws {
-        try await wire.send(Wire.Request(op: .file, path: path))
-        let reply = try await wire.receive(Wire.Reply.self)
+    private func fetch(_ path: String, over session: TetherSession, progress: @escaping @Sendable (Int64) -> Void = { _ in }) async throws {
+        try await session.send(SyncWire.Request(op: .file, path: path))
+        let reply = try await session.receive(SyncWire.Reply.self)
         guard reply.ok, let size = reply.size else { throw Failure.refused(reply.why ?? String(localized: "The Mac couldn't send \(path).")) }
         let target = root.appending(path: path)
         let part = root.appending(path: path + ".part")
-        try await wire.receiveFile(size: size, to: part, progress: progress)
+        try await session.receiveFile(size: size, to: part, progress: progress)
         _ = try? FileManager.default.removeItem(at: target)
         try FileManager.default.moveItem(at: part, to: target)
     }
@@ -137,7 +104,9 @@ struct SyncClient {
 
     private static func readLog(_ url: URL) -> ChangeLog {
         guard let data = try? Data(contentsOf: url) else { return ChangeLog() }
-        return (try? Wire.decoder.decode(ChangeLog.self, from: data)) ?? ChangeLog()
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(ChangeLog.self, from: data)) ?? ChangeLog()
     }
 
     /// What to fetch and what to delete: a track is kept when its file is there and the old manifest has it the same (file, size and

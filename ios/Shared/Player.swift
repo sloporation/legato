@@ -43,7 +43,7 @@ final class Player {
         didSet { player.isMuted = muted }
     }
 
-    private let library: any TrackFiles
+    let library: any TrackFiles
     private var queue = PlayQueue()
     private let player = AVPlayer()
     private var timeObserver: Any?

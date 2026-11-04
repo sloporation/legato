@@ -166,10 +166,13 @@ final class AppModel {
     let library: LibraryStore
     let player: Player
     let watch: WatchSender
+    let remote: WatchRemote
 
     private init() {
         library = LibraryStore()
         player = Player(library: library)
         watch = WatchSender(library: library)
+        remote = WatchRemote(library: library, player: player, session: watch.session)
+        watch.remote = remote
     }
 }

@@ -38,43 +38,23 @@ file. On Linux, iPhones need the `usbmuxd` service running. Windows can't sync y
 
 ## Legato for Mac → iPhone (Wi-Fi)
 
-Legato for Mac is sandboxed for the Mac App Store, which rules out usbmuxd, so it syncs over the local network instead. The Mac
-listens on TCP and advertises `_legato._tcp` with Bonjour, its id in the TXT record (`mac=<uuid>`); Sync with Mac on the phone finds
-it and connects. The phone ends up with the same `Legato/` folder, kept the same way, so it doesn't matter which app last synced it
-(both name tracks by the same hash of the file's path).
+Legato for Mac is sandboxed for the Mac App Store, which rules out usbmuxd, so it syncs over the local network instead. The phone ends
+up with the same `Legato/` folder, kept the same way, so it doesn't matter which app last synced it (both name tracks by the same hash
+of the file's path).
 
-Everything goes over TLS 1.2 with a pre-shared key, `TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256`
-(`ios/Sync/Wire.swift`). The pre-shared key is each phone's own, agreed when it paired; the ephemeral key exchange on top means a key
-found later can't open syncs recorded before it. TLS identities are phone ids, plus `legato-pairing`, whose key is fixed and public,
-for pairing (which is made safe by the code, not by TLS). The Mac's listener knows the keys of the phones it has allowed; it starts
-listening again (usually on another port, which Bonjour passes on) when that changes. Connections already open carry on.
+Finding, pairing and connecting are [Tether](https://github.com/sloporation/tether)'s, which Liftbro uses too (its README has the
+details). The Mac advertises `_legato._tcp` with Bonjour; Sync with Mac on the phone finds it. The first time, the phone pairs: a
+Curve25519 key agreement, with the phone committing to its half first, gives both the same key and the same six-digit code, which the
+Mac shows with "“iPhone” wants to sync with this Mac"; the person checks it and allows the phone. After that they connect over TLS 1.2
+with that key (`TLS_ECDHE_PSK_WITH_CHACHA20_POLY1305_SHA256`), and the phone proves which phone it is. Both keep the keys in the
+Keychain. If the Mac has forgotten the phone, the phone is told so and pairs again. Tether's configuration (`ios/Sync/SyncWire.swift`)
+has the label `legato`.
 
-Each message is a 4-byte big-endian length and that much JSON; a reply that says `size` is followed by that many bytes of a file.
-The Mac speaks first on every connection, `{"ok": true, "challenge": "<32 random bytes>"}`, then the phone asks and the Mac answers.
+Over that connection, each message is a 4-byte big-endian length and that much JSON; a reply that says `size` is followed by that many
+bytes of a file. The phone asks and the Mac answers:
 
-**Pairing** (`ios/Sync/Pairing.swift`), over the `legato-pairing` identity, the first time or after the Mac has forgotten the phone:
-
-1. `{"op": "pair", "phone": "<id>", "name": "…", "commitment": "<SHA-256 of the phone's Curve25519 public key>"}`. The Mac answers
-   `{"ok": true, "mac": "<its id>", "key": "<its Curve25519 public key>"}`.
-2. `{"op": "pair", "key": "<the phone's public key>"}`, which has to match the commitment. Both work out the same 32-byte key, and a
-   six-digit code, with HKDF-SHA256 from the shared secret (salt: the phone's public key then the Mac's; info `legato sync key` and
-   `legato pairing code`). The Mac answers `{"ok": true, "waiting": true}` and shows "“iPhone” wants to sync with this Mac" with the
-   code; the phone shows the code too.
-3. Allowed on the Mac, it answers `{"ok": true}` once it is listening with the phone's key; Don't Allow, `{"ok": false, "why": …}`, and
-   that phone can't pair again until it's forgotten on the Mac. The phone stays connected meanwhile; if it hangs up, the Mac stops
-   asking.
-
-Someone in the middle would have to give each side their own public key, and then the codes differ (one chance in a million that they
-don't): the phone's commitment means they have to choose the key they give the phone before seeing the phone's, so they can't search
-for one that makes the codes match. The phone keeps a key per Mac id; the Mac keeps a key per phone.
-
-**Syncing**, over the phone's own identity and key:
-
-1. `{"op": "hello", "phone": "<id>", "name": "…", "proof": "<HMAC-SHA256 of the challenge and the phone id, with the key>", "chosen":
-   {…}, "batch": "…", "changes": […]}`. The proof says which phone this is (TLS says only that it is one the Mac allowed). With no
-   proof that fits, the Mac answers `{"ok": false, "unpaired": true}`, and the phone pairs again; it does that too when TLS fails. The
-   Mac makes the playlist changes, then answers with the manifest of what the phone is to have (`{"ok": true, "manifest": {…}}`), its
-   files named `Music/<id>.<ext>` and `Covers/<hash>.jpg`.
+1. `{"op": "hello", "chosen": {…}, "batch": "…", "changes": […]}`. The Mac makes the playlist changes, then answers with the manifest
+   of what the phone is to have (`{"ok": true, "manifest": {…}}`), its files named `Music/<id>.<ext>` and `Covers/<hash>.jpg`.
 2. `{"op": "file", "path": "Music/<id>.flac"}` for each file the phone hasn't got (by `id`, `size` and `modified`, as over USB), and
    each cover. The phone writes it as `.part` and renames it into place.
 3. The phone writes the manifest, deletes what it no longer names, and says `{"op": "done"}`; the Mac answers once it has noted it.
@@ -179,3 +159,25 @@ The iPhone app keeps its own choice of playlists, albums and artists for the wat
 The watch keeps the files under its own `Documents/Legato/`, writes the manifest there, and deletes the files the manifest no longer
 names. Transfers continue in the background and may arrive in any order, so the watch only shows tracks whose file has arrived. The
 watch tells the phone what it has (`transferUserInfo`, `{"have": [ids]}`) so nothing is sent twice.
+
+## The watch as a remote
+
+While the iPhone is in reach (`WCSession.isReachable`), Legato on the watch is a remote for Legato on the iPhone: it shows the iPhone's
+library, and what it chooses plays on the iPhone, through whatever the iPhone plays through (headphones go with the iPhone while it's
+near). Out of reach for more than a few seconds, the watch shows and plays the music synced to it, as above. The two talk with
+`sendMessage`, which wakes the iPhone app if it isn't running; every message from the watch gets an answer.
+
+- `{"op": "catalog", "have": "<version>"}`: the iPhone's library, as a manifest of its tracks (without covers) and playlists, JSON
+  compressed with LZFSE. The answer is `{"version": "<hash of it>", "pieces": n}`, with `n` 0 when the watch has that version
+  already; the watch then asks `{"op": "piece", "version": …, "index": i}` for each, which answers `{"data": <up to 48 KB>}`. The
+  watch keeps it, so it shows at once next time. The iPhone says `{"op": "catalog-changed"}` when its library changes.
+- `{"op": "play", "source": "playlist" | "album" | "artist" | "songs", "name": "<playlist or artist name, or album id>", "track":
+  "<id>", "shuffle": true}`: the iPhone makes the list from its own library (both group the tracks the same way) and plays it from
+  that track, or shuffled.
+- `{"op": "toggle"}`, `{"op": "next"}`, `{"op": "previous"}`, `{"op": "state"}`.
+
+Each of those but the catalog's answers with what's playing: `{"track": <the track, as JSON>, "playing": true, "position": 12.5,
+"duration": 200, "at": <seconds since 1970>, "problem": "…"}`, and the cover (`"art"`, a small JPEG, with `"artFor"`, the track's
+id) when the watch hasn't got it: each message says which track's cover it has (`"art": "<id>"`). The iPhone also sends the state
+(`"op": "state"`) when the track changes or it starts or stops, while the watch app is open; the watch asks every few seconds too, and
+counts the position on in between. The crown sets the iPhone's volume.
