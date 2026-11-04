@@ -31,6 +31,13 @@ final class MacSync {
     /// The Macs running Legato on this network now, by name.
     var macs: [TetherClient.Host] { client.discovered.sorted { $0.name < $1.name } }
     var problem: String? { client.problem }
+    /// The Macs this phone has paired with, whether on the network or not.
+    var pairedMacs: [TetherClient.PairedHost] { client.paired.sorted { $0.name < $1.name } }
+
+    /// Unpairs from a Mac: tells it to forget this phone if it's on the network now (otherwise it's told next time), and forgets it here.
+    func forget(_ id: String) {
+        Task { await client.unpair(from: id) }
+    }
 
     var busy: Bool {
         switch state {
@@ -119,6 +126,26 @@ struct MacSyncView: View {
                     Text("Open Legato on your Mac, on the same Wi-Fi. What goes on this phone is chosen there, under Phones; playlist changes made here go back to it.")
                 }
                 status(sync)
+                if !sync.pairedMacs.isEmpty {
+                    Section {
+                        ForEach(sync.pairedMacs) { mac in
+                            VStack(alignment: .leading) {
+                                Text(mac.name)
+                                if let last = mac.lastConnected {
+                                    Text("Last synced \(last, format: .relative(presentation: .named))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            .swipeActions {
+                                Button("Forget", role: .destructive) { sync.forget(mac.id) }
+                            }
+                        }
+                    } header: {
+                        Text("Paired Macs")
+                    } footer: {
+                        Text("Swipe left on a Mac to forget it. To sync with it again, pair again.")
+                    }
+                }
             }
         }
         .navigationTitle("Sync with Mac")
